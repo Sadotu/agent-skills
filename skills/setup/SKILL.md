@@ -48,6 +48,15 @@ APP_DIR="${GITHUB_APP_DIR:-$HOME/.config/github-app}"
 [ -r "$APP_DIR/app-id" ] || { [ -r /tmp/github-app/app-id ] && APP_DIR=/tmp/github-app; }
 ```
 
+Preflight the tools the JWT signing and API calls below need — fail clearly now
+rather than mid-flow:
+
+```bash
+for c in openssl curl jq; do
+  command -v "$c" >/dev/null 2>&1 || { echo "setup: missing required tool '$c'"; exit 1; }
+done
+```
+
 ---
 
 ## Phase 2 — Verify credentials are present
@@ -120,6 +129,9 @@ if [ "$INST_STATUS" = 404 ]; then
   echo "setup: GitHub App '$APP_SLUG' is NOT installed on $REPO."
   echo "       Install it (needs a repo/org admin), granting access to $REPO:"
   echo "         ${APP_HTML}/installations/new"
+  echo "       Grant these repository permissions so the agent workflow works:"
+  echo "         Contents: read & write | Pull requests: read & write"
+  echo "         Issues: read & write     | Metadata: read (implicit)"
   echo "       Then re-run /setup (or press on and I'll re-check)."
 fi
 ```
@@ -143,19 +155,50 @@ GH_TOKEN="$(GITHUB_APP_REPO="$REPO" "$HELPER")" \
   || { echo "setup: token mint / gh check failed for $REPO"; exit 1; }
 ```
 
-Ensure `git push`/`git fetch` use the App via the credential helper. Check it,
-and wire it if absent (the same line `setup-agents.sh` sets):
+Ensure `git push`/`git fetch` use the App via the credential helper.
+
+**Watch for a conflicting helper.** git consults every helper configured for
+`github.com` in order and uses the first that answers. A stale
+`gh auth git-credential` helper (planted by `gh auth setup-git`, which this
+container forbids) answers first with an invalid token — so `git push` fails
+with `Invalid username or token` *even when the App is installed and `gh api`
+works*. List the helpers and flag any non-App one before wiring:
 
 ```bash
-CUR="$(git config --global --get credential.https://github.com.helper || true)"
-case "$CUR" in
-  *git-credential-github-app.sh*) echo "setup: git credential helper already wired." ;;
-  *)
-    CRED="$(dirname "$HELPER")/git-credential-github-app.sh"
-    git config --global credential.https://github.com.helper "!$CRED"
-    echo "setup: wired git credential helper -> $CRED"
-    ;;
-esac
+mapfile -t HELPERS < <(git config --global --get-all credential.https://github.com.helper 2>/dev/null || true)
+for h in "${HELPERS[@]}"; do
+  case "$h" in
+    ""|*git-credential-github-app.sh*) ;;  # empty reset or the App helper — fine
+    *) echo "setup: WARNING — conflicting github.com credential helper is set and will win over the App:"
+       echo "         $h"
+       echo "       It likely came from 'gh auth setup-git' (forbidden here). Remove it:"
+       echo "         git config --global --unset-all credential.https://github.com.helper '$h'" ;;
+  esac
+done
+```
+
+Wire the App helper if it is not already the (only) helper — reset the list
+first so no stale helper can shadow it (the same line `setup-agents.sh` sets):
+
+```bash
+CRED="$(dirname "$HELPER")/git-credential-github-app.sh"
+if ! printf '%s\n' "${HELPERS[@]}" | grep -q 'git-credential-github-app.sh'; then
+  git config --global --unset-all credential.https://github.com.helper 2>/dev/null || true
+  git config --global credential.https://github.com.helper "!$CRED"
+  echo "setup: wired git credential helper -> $CRED"
+else
+  echo "setup: git credential helper already wired."
+fi
+```
+
+**Verify git itself authenticates — not just `gh`.** `gh api` passing is not
+proof `git` can push: they can use different credentials. Probe the real git
+auth path (read-only, no push needed):
+
+```bash
+GITHUB_APP_REPO="$REPO" git ls-remote "https://github.com/$REPO" HEAD >/dev/null 2>&1 \
+  && echo "setup: git authenticates to $REPO as the App." \
+  || { echo "setup: git auth FAILED for $REPO despite gh working — a conflicting helper is likely shadowing the App (see warning above)."; exit 1; }
 ```
 
 ---
