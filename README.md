@@ -11,8 +11,11 @@ installed automatically by `setup-agents.sh` on every container start.
 
 ## Layout
 
-Each skill is a directory with a `SKILL.md` (frontmatter: `name`,
-`description`), following the same convention as Claude Code's own skills.
+Each skill lives at `skills/<name>/SKILL.md` (frontmatter: `name`,
+`description`) — the `skills/` prefix is the "conventional directory"
+`dotagents` searches for when resolving a bare `name` + `source = "owner/repo"`
+entry in a consumer's `agents.toml`. Skills placed directly at the repo root
+(no `skills/` prefix) won't resolve without an explicit `path` field.
 
 ## Skills
 
