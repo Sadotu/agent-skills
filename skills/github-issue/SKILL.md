@@ -1,6 +1,6 @@
 ---
 name: github-issue
-description: Use when working a GitHub issue in this repo — runs the whole flow end to end: select the issue, open a draft PR immediately, self-resolve design decisions and log them to the PR, implement in an isolated worktree via subagents, verify against the issue, and mark the PR ready to close the issue.
+description: "Use when working a GitHub issue in this repo — runs the whole flow end to end: select the issue, open a draft PR immediately, self-resolve design decisions and log them to the PR, implement in an isolated worktree via subagents, verify against the issue, and mark the PR ready to close the issue."
 ---
 
 # GitHub Issue — End to End
