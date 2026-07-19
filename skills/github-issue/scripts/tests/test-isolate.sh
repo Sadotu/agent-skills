@@ -207,10 +207,17 @@ test_case4_happy_path() {
     bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/agent/7-my-cool-slug"
   assert_true "case4: gh pr create was invoked" \
     bash -c "grep -q 'pr create' '$GH_LOG'"
-  assert_true "case4: PR body contains the exact closing reference" \
-    bash -c "grep -q 'Closes #7' '$GH_LOG'"
   assert_true "case4: PR title passed through" \
     bash -c "grep -q 'My PR Title' '$GH_LOG'"
+
+  local expected_body
+  expected_body=$'Closes #7\n\n## Design Decisions\n_In progress — filled in once design work completes._'
+  local log_content
+  log_content="$(cat "$GH_LOG")"
+  case "$log_content" in
+    *"$expected_body"*) ok "case4: PR body is the exact template text" ;;
+    *) fail "case4: PR body is the exact template text" ;;
+  esac
 }
 
 test_case1_dirty_primary_tree
