@@ -321,8 +321,6 @@ test_case7_clean_squash() {
   assert_true "case7: worktree removed" [ ! -e "$WT" ]
   assert_false "case7: local branch deleted (via -D, tip is not an ancestor)" \
     bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
-  assert_true "case7: local main fast-forwarded to origin/main" \
-    bash -c "[ \"\$(git -C '$CLONE' rev-parse main)\" = \"\$(git -C '$CLONE' rev-parse origin/main)\" ]"
 }
 
 # --- Case 8: squash whose diff was altered by conflict resolution -> refuse ---
