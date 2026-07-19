@@ -55,7 +55,7 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 
 **REQUIRED SUB-SKILL:** Use `superpowers:using-git-worktrees`.
 
-**CRITICAL — synchronize before writing or committing issue artifacts.** `git fetch` updates `origin/main`, not local `main`. Committing design/plan in the primary worktree before isolation pollutes local `main` and makes it diverge.
+**CRITICAL — synchronize before writing or committing issue work.** `git fetch` updates `origin/main`, not local `main`. Committing in the primary worktree before isolation pollutes local `main` and makes it diverge.
 
 Start from a clean primary worktree on `main`, fetch, fast-forward only when safe, then branch from `origin/main`:
 
@@ -98,7 +98,7 @@ Report the PR URL to the user now — it is the first thing they see, before any
 
 **Override for this workflow — do not pause at any of brainstorming's gates.** That skill normally stops and waits for the user at each step: clarifying questions, the approach choice, per-section design approval, the spec review gate. Here none of that waits. For every question you would have asked, generate it as usual, answer it yourself (pick the recommended or best option), and continue immediately. Record each one as you go: the question, the options considered, the answer chosen, and why.
 
-Once the design doc and plan are written and committed, replace the "In progress" placeholder in the PR body with the full log:
+Once the design doc and plan are written, replace the "In progress" placeholder in the PR body with the full log:
 
 ```bash
 GH pr edit <pr-number> --body "$(cat <<'EOF'
@@ -111,14 +111,19 @@ EOF
 )"
 ```
 
-This is the user's asynchronous review surface for the design conversation. After the design is settled, use `superpowers:writing-plans` to produce the plan.
+This is the user's asynchronous review surface for the design conversation — the full design rationale lives here, in the PR body, not in the repo. After the design is settled, use `superpowers:writing-plans` to produce the plan.
 
-Commit two artifacts inside `<worktree-path>` so they land in the PR diff — records for the PR, not something the user must re-read before implementation continues:
+Write two artifacts inside `<worktree-path>` as **session-local working files** — the plan drives Phase 4, the design records the decisions. They must **not** land in the PR diff, so Git-exclude them before writing (Phase 7 deletes them with the worktree):
+
+```bash
+excl="$(git rev-parse --git-path info/exclude)"
+grep -qxF 'docs/superpowers/' "$excl" || echo 'docs/superpowers/' >> "$excl"
+```
 
 - Design: `docs/superpowers/specs/<YYYY-MM-DD>-<slug>-design.md`
 - Plan: `docs/superpowers/plans/<YYYY-MM-DD>-<slug>.md`
 
-The plan must record the issue number and URL, the original acceptance criteria, and the PR closing reference `Closes #<number>`.
+The plan must record the issue number and URL, the original acceptance criteria, and the PR closing reference `Closes #<number>`. Confirm `git status --porcelain` shows neither artifact before continuing.
 
 ---
 
@@ -164,7 +169,7 @@ If stale, `git rebase origin/main` (resolve conflicts, drop already-merged commi
 **The PR already exists (opened in Phase 2) — finalize it, don't create a new one:**
 
 - Push the final commits to the existing branch.
-- Update the PR body: append a verification summary below the Design Decisions log — what was checked, against which acceptance criteria — plus links to the committed spec and plan paths (`docs/superpowers/specs/…`, `docs/superpowers/plans/…`). Keep the single `Closes #<number>` line intact; don't duplicate it.
+- Update the PR body: append a verification summary below the Design Decisions log — what was checked, against which acceptance criteria. The spec and plan are session-local and never committed, so the PR body (Design Decisions + verification summary) is the whole record — do not link `docs/superpowers/…` paths that aren't in the diff. Keep the single `Closes #<number>` line intact; don't duplicate it.
 - Mark it ready: `GH pr ready <pr-number>`.
 - Report the branch name and PR URL.
 
@@ -198,10 +203,12 @@ test -n "$ISSUE_WORKTREE"
 test -z "$(git -C "$ISSUE_WORKTREE" status --porcelain)"
 ```
 
-Stop and report the failed guard without cleanup if any command above fails. Once all guards pass, remove the worktree, prune its metadata, delete the local branch safely, and delete the matching remote branch when it still exists:
+Stop and report the failed guard without cleanup if any command above fails. Once all guards pass, delete the session-local design/plan artifacts (Git-excluded in Phase 3, so they never reached the PR), then remove the worktree, prune its metadata, delete the local branch safely, and delete the matching remote branch when it still exists:
 
 ```bash
 cd "$WORKSPACE"
+rm -f "$ISSUE_WORKTREE"/docs/superpowers/specs/*-design.md \
+      "$ISSUE_WORKTREE"/docs/superpowers/plans/*.md
 git worktree remove "$ISSUE_WORKTREE"
 git worktree prune
 git branch -d "$BRANCH"
