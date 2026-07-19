@@ -364,6 +364,33 @@ test_case9_rebase_merge() {
     bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
 }
 
+# --- Case 10: squash diff differs from the feature branch only by leading
+# whitespace -> must NOT patch-match (--verbatim), refuse cleanup. Regression
+# test for git patch-id --stable/--unstable stripping whitespace, which would
+# let a whitespace-only divergence (e.g. significant Python indentation)
+# false-positive into a proven squash and reach `git branch -D`. ---
+test_case10_whitespace_only_squash_diff() {
+  new_fixture 20 whitespace-squash
+  echo "    feature line" > "$WT/feature.txt"
+  git -C "$WT" add feature.txt
+  git -C "$WT" commit -q -m "add indented feature line"
+  git -C "$WT" push -q origin "$BRANCH"
+
+  local merge_sha
+  merge_sha="$(push_direct_commit_to_main feature.txt "feature line")"
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_PR_MERGE_COMMIT="$merge_sha" \
+    run_cleanup "$CLONE" 20 20 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_PR_MERGE_COMMIT
+
+  [ "$rc" -ne 0 ] && ok "case10: nonzero exit when the squash diff differs only by leading whitespace" \
+    || fail "case10: nonzero exit when the squash diff differs only by leading whitespace (got rc=$rc)"
+  assert_true "case10: worktree left in place" [ -d "$WT" ]
+  assert_true "case10: local branch still present" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
 test_case1_not_merged
 test_case2_non_agent_branch
 test_case3_not_ancestor
@@ -373,6 +400,7 @@ test_case6_happy_path
 test_case7_clean_squash
 test_case8_squash_conflict_resolution
 test_case9_rebase_merge
+test_case10_whitespace_only_squash_diff
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

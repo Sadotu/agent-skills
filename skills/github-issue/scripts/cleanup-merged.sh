@@ -59,8 +59,8 @@ else
     && git -C "$WORKSPACE" merge-base --is-ancestor "$MERGE_SHA" origin/main; then
     MERGE_PARENT="$(git -C "$WORKSPACE" rev-parse "$MERGE_SHA^")"
     FEATURE_BASE="$(git -C "$WORKSPACE" merge-base "$HEAD_SHA" "$MERGE_PARENT")"
-    FEATURE_PATCH_ID="$(git -C "$WORKSPACE" diff "$FEATURE_BASE" "$HEAD_SHA" | git patch-id --stable | awk '{print $1}')"
-    SQUASH_PATCH_ID="$(git -C "$WORKSPACE" diff "$MERGE_PARENT" "$MERGE_SHA" | git patch-id --stable | awk '{print $1}')"
+    FEATURE_PATCH_ID="$(git -C "$WORKSPACE" diff "$FEATURE_BASE" "$HEAD_SHA" | git patch-id --verbatim | awk '{print $1}')"
+    SQUASH_PATCH_ID="$(git -C "$WORKSPACE" diff "$MERGE_PARENT" "$MERGE_SHA" | git patch-id --verbatim | awk '{print $1}')"
     if [ -n "$FEATURE_PATCH_ID" ] && [ "$FEATURE_PATCH_ID" = "$SQUASH_PATCH_ID" ]; then
       MERGE_MODE=squash
     fi
