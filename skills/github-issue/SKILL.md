@@ -57,35 +57,10 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 
 **CRITICAL — synchronize before writing or committing issue work.** `git fetch` updates `origin/main`, not local `main`. Committing in the primary worktree before isolation pollutes local `main` and makes it diverge.
 
-Start from a clean primary worktree on `main`, fetch, fast-forward only when safe, then branch from `origin/main`:
+`scripts/isolate.sh` syncs the primary worktree with `origin/main`, isolates issue work into its own worktree and branch, and opens the draft PR — all before any issue commit happens. It guarantees issue work is never committed onto a dirty or diverged `main`: on any guard failure it exits nonzero without mutating the primary worktree, preserving user work so you can report the exact condition and ask for direction. Use a 3–5 word kebab-case slug. From here on, run all writes, commits, tests, and Git commands in `<worktree-path>` unless a command explicitly inspects the primary worktree.
 
 ```bash
-test "$(git branch --show-current)" = main
-test -z "$(git status --porcelain)"
-git fetch origin
-git merge-base --is-ancestor main origin/main
-git merge --ff-only origin/main
-test "$(git rev-parse main)" = "$(git rev-parse origin/main)"
-git worktree add -b agent/<number>-<slug> <worktree-path> origin/main
-```
-
-If the branch, cleanliness, or ancestry guard fails, stop — preserve user work (do not reset, merge divergent histories, or commit issue artifacts in the primary worktree), report the exact condition, and request direction. Use a 3–5 word kebab-case slug. From here on, run all writes, commits, tests, and Git commands in `<worktree-path>` unless a command explicitly inspects the primary worktree.
-
-**Open the PR now, as a draft.** A PR needs a branch with at least one commit ahead of `origin/main`, so seed one, push, and open immediately:
-
-```bash
-cd <worktree-path>
-git commit --allow-empty -m "Start work on #<number>"
-git push -u origin agent/<number>-<slug>
-GH pr create --draft \
-  --title "<title referencing #<number>>" \
-  --body "$(cat <<'EOF'
-Closes #<number>
-
-## Design Decisions
-_In progress — filled in once design work completes._
-EOF
-)"
+scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
 ```
 
 Report the PR URL to the user now — it is the first thing they see, before any design question is generated. The PR stays **draft** until Phase 6 marks it ready.
@@ -181,58 +156,10 @@ Do not merge unless the user explicitly requests it.
 
 Run this phase when the user reports the PR merged or authenticated GitHub state reports `MERGED`. Never treat a merely closed PR as merged.
 
-Resolve the merged branch from the PR, then enforce the `agent/*` boundary:
+`scripts/cleanup-merged.sh` only ever cleans up once the PR is `MERGED`, its branch is under `agent/*`, that branch has actually landed in `origin/main`, and its worktree (including untracked files) is clean; on any guard failure it stops and reports without touching anything.
 
 ```bash
-PR_JSON="$(GH pr view <pr-number> --json state,headRefName)"
-test "$(printf '%s' "$PR_JSON" | jq -r .state)" = MERGED
-BRANCH="$(printf '%s' "$PR_JSON" | jq -r .headRefName)"
-case "$BRANCH" in agent/*) ;; *) echo "Refusing to delete non-agent branch: $BRANCH"; exit 1 ;; esac
-```
-
-Fetch and prove the branch tip landed in `origin/main`. Find its registered worktree and require it to be clean, including untracked files:
-
-```bash
-git -C "$WORKSPACE" fetch origin
-git -C "$WORKSPACE" merge-base --is-ancestor "$BRANCH" origin/main
-ISSUE_WORKTREE="$(git -C "$WORKSPACE" worktree list --porcelain | awk -v ref="refs/heads/$BRANCH" '
-  /^worktree / { wt=substr($0, 10) }
-  $0 == "branch " ref { print wt }
-')"
-test -n "$ISSUE_WORKTREE"
-test -z "$(git -C "$ISSUE_WORKTREE" status --porcelain)"
-```
-
-Stop and report the failed guard without cleanup if any command above fails. Once all guards pass, delete the session-local design/plan artifacts (Git-excluded in Phase 3, so they never reached the PR), then remove the worktree, prune its metadata, delete the local branch safely, and delete the matching remote branch when it still exists:
-
-```bash
-cd "$WORKSPACE"
-rm -f "$ISSUE_WORKTREE"/docs/superpowers/specs/*-design.md \
-      "$ISSUE_WORKTREE"/docs/superpowers/plans/*.md
-git worktree remove "$ISSUE_WORKTREE"
-git worktree prune
-git branch -d "$BRANCH"
-if git ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
-  git push origin --delete "$BRANCH"
-fi
-```
-
-Fast-forward local `main` without resetting or cleaning user files:
-
-```bash
-test "$(git branch --show-current)" = main
-git merge-base --is-ancestor main origin/main
-git merge --ff-only origin/main
-test "$(git rev-parse main)" = "$(git rev-parse origin/main)"
-```
-
-Finally, confirm the issue closed; close it manually if GitHub did not process the closing reference:
-
-```bash
-ISSUE_STATE="$(GH issue view <number> --json state -q .state)"
-if [ "$ISSUE_STATE" != CLOSED ]; then
-  GH issue close <number>
-fi
+scripts/cleanup-merged.sh <pr-number> <issue-number>
 ```
 
 Never use forced worktree removal, `git branch -D`, reset, clean, or force-push during post-merge cleanup. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
