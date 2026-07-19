@@ -76,8 +76,8 @@ case "$1 $2" in
     echo "${STUB_REPO:-testowner/testrepo}"
     ;;
   "pr view")
-    printf '{"state":"%s","headRefName":"%s"}\n' \
-      "${STUB_PR_STATE:-OPEN}" "${STUB_PR_HEAD_REF:-agent/0-x}"
+    printf '{"state":"%s","headRefName":"%s","mergeCommit":{"oid":"%s"}}\n' \
+      "${STUB_PR_STATE:-OPEN}" "${STUB_PR_HEAD_REF:-agent/0-x}" "${STUB_PR_MERGE_COMMIT:-}"
     ;;
   "issue view")
     echo "${STUB_ISSUE_STATE:-OPEN}"
@@ -99,6 +99,8 @@ SHIM
 # commit ahead of origin/main and pushed to the fake origin — not yet
 # merged into origin/main.
 new_fixture() {
+  local content=0
+  if [ "$1" = "--content" ]; then content=1; shift; fi
   local issue="$1" slug="$2"
   BASE="$(mktemp -d)"
   TMP_DIRS+=("$BASE")
@@ -128,7 +130,13 @@ new_fixture() {
   git -C "$CLONE" worktree add -q -b "$BRANCH" "$WT" origin/main
   git -C "$WT" config user.email test@example.com
   git -C "$WT" config user.name "Test User"
-  git -C "$WT" commit -q --allow-empty -m "Start work on #${issue}"
+  if [ "$content" -eq 1 ]; then
+    echo "feature line" > "$WT/feature.txt"
+    git -C "$WT" add feature.txt
+    git -C "$WT" commit -q -m "Start work on #${issue}"
+  else
+    git -C "$WT" commit -q --allow-empty -m "Start work on #${issue}"
+  fi
   git -C "$WT" push -q -u origin "$BRANCH"
 
   mkdir -p "$STUBBIN"
@@ -141,6 +149,23 @@ merge_branch_into_origin_main() {
   git -C "$CLONE" fetch -q origin
   git -C "$CLONE" merge -q --ff-only "$BRANCH"
   git -C "$CLONE" push -q origin main
+}
+
+# push_direct_commit_to_main <file> <content> — commits <content> to
+# <file> directly onto CLONE's main, bypassing any merge with $BRANCH,
+# and pushes. Simulates a squash/rebase merge commit landing on
+# origin/main without the branch tip ever becoming its ancestor. Echoes
+# the new commit's SHA on stdout.
+push_direct_commit_to_main() {
+  local file="$1" content="$2"
+  git -C "$CLONE" fetch -q origin
+  git -C "$CLONE" checkout -q main
+  git -C "$CLONE" merge -q --ff-only origin/main
+  echo "$content" > "$CLONE/$file"
+  git -C "$CLONE" add "$file"
+  git -C "$CLONE" commit -q -m "squash landing"
+  git -C "$CLONE" push -q origin main
+  git -C "$CLONE" rev-parse HEAD
 }
 
 # run_cleanup <cwd> <pr-number> <issue-number>
@@ -281,12 +306,75 @@ test_case6_happy_path() {
     bash -c "grep -q 'issue close 16' '$GH_LOG'"
 }
 
+# --- Case 7: clean squash (patch-id equivalent) -> MERGE_MODE=squash, cleanup proceeds ---
+test_case7_clean_squash() {
+  new_fixture --content 17 clean-squash
+  local merge_sha
+  merge_sha="$(push_direct_commit_to_main feature.txt "feature line")"
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_PR_MERGE_COMMIT="$merge_sha" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 17 17 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_PR_MERGE_COMMIT STUB_ISSUE_STATE
+
+  assert_eq "case7: exits zero on a clean squash (patch-id equivalent)" 0 "$rc"
+  assert_true "case7: worktree removed" [ ! -e "$WT" ]
+  assert_false "case7: local branch deleted (via -D, tip is not an ancestor)" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_true "case7: local main fast-forwarded to origin/main" \
+    bash -c "[ \"\$(git -C '$CLONE' rev-parse main)\" = \"\$(git -C '$CLONE' rev-parse origin/main)\" ]"
+}
+
+# --- Case 8: squash whose diff was altered by conflict resolution -> refuse ---
+test_case8_squash_conflict_resolution() {
+  new_fixture --content 18 squash-conflict
+  local merge_sha
+  merge_sha="$(push_direct_commit_to_main feature.txt "feature line, resolved differently")"
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_PR_MERGE_COMMIT="$merge_sha" \
+    run_cleanup "$CLONE" 18 18 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_PR_MERGE_COMMIT
+
+  [ "$rc" -ne 0 ] && ok "case8: nonzero exit when the squash diff was altered by conflict resolution" \
+    || fail "case8: nonzero exit when the squash diff was altered by conflict resolution (got rc=$rc)"
+  assert_true "case8: worktree left in place" [ -d "$WT" ]
+  assert_true "case8: local branch still present" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
+# --- Case 9: rebase merge (mergeCommit is only the last replayed commit) -> refuse ---
+test_case9_rebase_merge() {
+  new_fixture --content 19 rebase-merge
+  echo "second line" >> "$WT/other.txt"
+  git -C "$WT" add other.txt
+  git -C "$WT" commit -q -m "second commit"
+  git -C "$WT" push -q origin "$BRANCH"
+
+  local merge_sha
+  merge_sha="$(push_direct_commit_to_main other.txt "second line")"
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_PR_MERGE_COMMIT="$merge_sha" \
+    run_cleanup "$CLONE" 19 19 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_PR_MERGE_COMMIT
+
+  [ "$rc" -ne 0 ] && ok "case9: nonzero exit on a rebase merge (last-commit-only diff never matches the whole feature)" \
+    || fail "case9: nonzero exit on a rebase merge (got rc=$rc)"
+  assert_true "case9: worktree left in place" [ -d "$WT" ]
+  assert_true "case9: local branch still present" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
 test_case1_not_merged
 test_case2_non_agent_branch
 test_case3_not_ancestor
 test_case4_dirty_worktree
 test_case5_cwd_inside_worktree_being_removed
 test_case6_happy_path
+test_case7_clean_squash
+test_case8_squash_conflict_resolution
+test_case9_rebase_merge
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
