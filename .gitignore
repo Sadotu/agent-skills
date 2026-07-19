@@ -1,0 +1,5 @@
+.devcontainer/
+.claude/
+.agents/
+agents.lock
+agents.toml
