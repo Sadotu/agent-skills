@@ -30,23 +30,13 @@ test "$(printf '%s' "$PR_JSON" | jq -r .state)" = MERGED
 BRANCH="$(printf '%s' "$PR_JSON" | jq -r .headRefName)"
 case "$BRANCH" in agent/*) ;; *) echo "Refusing to delete non-agent branch: $BRANCH"; exit 1 ;; esac
 
-# --- Guard: branch's work actually landed in origin/main. Three merge
-#     strategies produce different history shapes:
-#      - true merge commit: the branch tip is an ancestor of origin/main
-#        directly -> MERGE_MODE=regular.
-#      - squash merge: content lands, but the tip's own commit is never
-#        an ancestor -> proven instead via patch-id equivalence against
-#        the PR's mergeCommit -> MERGE_MODE=squash.
-#      - rebase merge: commits are replayed with new SHAs; mergeCommit is
-#        only the last replayed commit, so its diff is never the whole
-#        feature's -> patch-id can never match -> falls through to "stop
-#        and ask a human". Conservative by construction: a false
-#        negative here costs a manual check, never a wrong deletion.
-#     Known limitation, not fixed: patch-id hashes diff context lines,
-#     so unrelated commits landing near the feature's changes between
-#     branch creation and squash-merge can shift context and produce a
-#     false negative even for a clean squash. Fails safe (stops and
-#     asks), so left as-is. ---
+# --- Guard: branch's work actually landed in origin/main. Invariant:
+#     MERGE_MODE=regular iff the branch tip is an ancestor of origin/main;
+#     MERGE_MODE=squash iff not, but the branch diff and mergeCommit diff
+#     are proven patch-id equivalent; anything else refuses and asks a
+#     human. Known limitation: patch-id hashes diff context lines, so
+#     unrelated commits shifting that context can produce a false
+#     negative even for a clean squash -- fails safe, left as-is. ---
 git -C "$WORKSPACE" fetch origin
 
 if git -C "$WORKSPACE" merge-base --is-ancestor "$BRANCH" origin/main; then
