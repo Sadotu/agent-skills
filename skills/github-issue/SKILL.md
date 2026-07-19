@@ -156,13 +156,13 @@ Do not merge unless the user explicitly requests it.
 
 Run this phase when the user reports the PR merged or authenticated GitHub state reports `MERGED`. Never treat a merely closed PR as merged.
 
-`scripts/cleanup-merged.sh` only ever cleans up once the PR is `MERGED`, its branch is under `agent/*`, that branch has actually landed in `origin/main`, and its worktree (including untracked files) is clean; on any guard failure it stops and reports without touching anything.
+`scripts/cleanup-merged.sh` only ever cleans up once the PR is `MERGED`, its branch is under `agent/*`, that branch has actually landed in `origin/main` — as a true merge commit, or proven via `git patch-id` equivalence for a squash merge; rebase merges stop and ask, since the PR's merge commit is only the last replayed commit and can never patch-match the whole feature — and its worktree (including untracked files) is clean; on any guard failure it stops and reports without touching anything.
 
 ```bash
 scripts/cleanup-merged.sh <pr-number> <issue-number>
 ```
 
-Never use forced worktree removal, `git branch -D`, reset, clean, or force-push during post-merge cleanup. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
+Never use forced worktree removal, reset, clean, or force-push during post-merge cleanup. `git branch -D` only via the proven-squash path in `cleanup-merged.sh` (PR `MERGED` + `agent/*` + merge commit in `origin/main` + patch-id equivalence + clean worktree); never by hand. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
 
 ---
 
