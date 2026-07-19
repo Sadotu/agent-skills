@@ -9,8 +9,8 @@ A single continuous workflow — select the issue, design, implement, verify, PR
 
 **Preconditions:**
 
-- **Runs inside the agent devcontainer.** GitHub App auth depends on `/opt/agent-devcontainer/gh-app-token.sh` and the git credential helper (`/opt/agent-devcontainer/git-credential-github-app.sh`), both baked into the image. On a bare WSL host they don't exist and every `gh` command and push fails — stop and run inside the container.
 - **Run all phases in one shell session** so `$REPO`, `$WORKSPACE`, and the `GH` helper below persist. This harness may run each command in a fresh shell; if the shell resets, re-run the setup block before continuing.
+- **Authentication adapts to the environment.** Inside the agent devcontainer, `gh` and git push use the GitHub App (helper baked into the image). Anywhere else — a WSL host, a plain container — they use your own `gh` login; run `gh auth login` and `gh auth setup-git` once first. The `GH` helper below selects the right path automatically.
 
 **Core principle:** the issue description is the leading input — it seeds the design work and is the spec you verify the result against. The PR opens as a draft *before* any design work, so the user reviews the whole design conversation asynchronously in the PR body rather than live.
 
@@ -20,10 +20,16 @@ Setup — resolve the repo dynamically (never hardcode an owner/repo) and define
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null \
   || git remote get-url origin | sed -E 's#.*[:/]([^/]+/[^/.]+)(\.git)?$#\1#')"
 WORKSPACE="$(git rev-parse --show-toplevel)"
-GH() { GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@" --repo "$REPO"; }
+if [ -x /opt/agent-devcontainer/gh-app-token.sh ]; then
+  # devcontainer: mint a short-lived GitHub App token per call
+  GH() { GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@" --repo "$REPO"; }
+else
+  # elsewhere: use your own authenticated gh (run `gh auth login` first)
+  GH() { gh "$@" --repo "$REPO"; }
+fi
 ```
 
-`git` push/fetch are already authenticated by the credential helper — no manual token needed.
+`git` push/fetch rely on whatever credential helper the environment wired — the container's App helper, or `gh auth setup-git` on a host — so no manual token is needed either way.
 
 ---
 
