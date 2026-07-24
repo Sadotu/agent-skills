@@ -73,15 +73,15 @@ Report the PR URL to the user now — it is the first thing they see, before any
 
 **Override for this workflow — do not pause at any of brainstorming's gates.** That skill normally stops and waits for the user at each step: clarifying questions, the approach choice, per-section design approval, the spec review gate. Here none of that waits. For every question you would have asked, generate it as usual, answer it yourself (pick the recommended or best option), and continue immediately. Record each one as you go: the question, the options considered, the answer chosen, and why.
 
-Once the design doc and plan are written, replace the "In progress" placeholders in the PR body with the full log. The `## Summary` block gives a reviewer the intent at a glance — the problem being solved and how the change addresses it — before they read the design log or the diff:
+Once the design doc and plan are written, replace the PR body placeholders. `## Summary` should tell reviewers what the PR solves and how, before the design log and diff:
 
 ```bash
 GH pr edit <pr-number> --body "$(cat <<'EOF'
 Closes #<number>
 
 ## Summary
-- **Problem:** <what this PR solves, drawn from the issue — one or two sentences>
-- **Approach:** <how the change addresses it — the design you settled on>
+- **Problem:** <what the issue requires>
+- **Approach:** <how this PR solves it>
 
 ## Design Decisions
 - **Q:** <question> — **A:** <answer chosen> — **Why:** <reasoning>
@@ -90,7 +90,7 @@ EOF
 )"
 ```
 
-Both `## Summary` bullets must be **specific to this issue and its resulting changes — never generic boilerplate**. Derive the **Problem** from the issue description and the **Approach** from the design you chose (Phase 6 reconciles it with the actual diff). This is the user's asynchronous review surface for the design conversation — the full design rationale lives here, in the PR body, not in the repo. After the design is settled, use `superpowers:writing-plans` to produce the plan.
+Derive **Problem** from the issue and **Approach** from the chosen design; both must be specific, not boilerplate. Phase 6 updates **Approach** if the implementation differs. The PR body is the asynchronous record of the design conversation. Then use `superpowers:writing-plans` to produce the plan.
 
 Write two artifacts inside `<worktree-path>` as **session-local working files** — the plan drives Phase 4, the design records the decisions. They must **not** land in the PR diff, so Git-exclude them before writing (Phase 7 deletes them with the worktree):
 
@@ -148,8 +148,7 @@ If stale, `git rebase origin/main` (resolve conflicts, drop already-merged commi
 **The PR already exists (opened in Phase 2) — finalize it, don't create a new one:**
 
 - Push the final commits to the existing branch.
-- Reconcile the `## Summary` **Approach** bullet with what actually shipped — if implementation diverged from the Phase 3 design, update it so it describes the real diff, not the original plan. The **Problem** bullet stays anchored to the issue.
-- Update the PR body: append a verification summary below the Design Decisions log — what was checked, against which acceptance criteria. The spec and plan are session-local and never committed, so the PR body (Summary + Design Decisions + verification summary) is the whole record — do not link `docs/superpowers/…` paths that aren't in the diff. Keep the single `Closes #<number>` line and the `## Summary` block intact; don't duplicate them.
+- Update the existing PR body: make the Summary's **Approach** match the actual diff, then append verification results against the acceptance criteria below Design Decisions. Preserve the single `Closes #<number>` line and Summary block. Because the spec and plan are session-local, do not link their paths.
 - Mark it ready: `GH pr ready <pr-number>`.
 - Report the branch name and PR URL.
 
@@ -176,6 +175,6 @@ Never use forced worktree removal, reset, clean, or force-push during post-merge
 - **Branching from local `main` or a feature branch.** Always branch from freshly-fetched `origin/main`; if local `main` diverged or the primary worktree is dirty, stop without mutating it.
 - **Writing or committing issue artifacts in the primary worktree.** After isolation, every write and commit happens in `<worktree-path>` — never on primary `main`.
 - **More than one `Closes #<number>` in the PR body.** Exactly one closing reference.
-- **A generic or boilerplate `## Summary`.** The Problem must come from this issue and the Approach must match this diff — not filler that would fit any PR.
+- **Generic `## Summary`.** Problem must reflect the issue; Approach must reflect the diff.
 - **Leaving the PR in draft past a green Phase 6.** Mark it ready once verification passes.
 - **Treating a merely closed PR as merged.** Only `MERGED` triggers Phase 7 cleanup.
