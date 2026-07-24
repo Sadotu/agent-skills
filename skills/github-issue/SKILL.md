@@ -73,6 +73,8 @@ Report the PR URL to the user now — it is the first thing they see, before any
 
 **Override for this workflow — do not pause at any of brainstorming's gates.** That skill normally stops and waits for the user at each step: clarifying questions, the approach choice, per-section design approval, the spec review gate. Here none of that waits. For every question you would have asked, generate it as usual, answer it yourself (pick the recommended or best option), and continue immediately. Record each one as you go: the question, the options considered, the answer chosen, and why.
 
+**Prefer the simplest design that satisfies the issue; avoid speculative requirements.**
+
 Once the design doc and plan are written, replace the PR body placeholders. `## Summary` should tell reviewers what the PR solves and how, before the design log and diff:
 
 ```bash
@@ -114,6 +116,8 @@ Execute the plan task by task with fresh subagents and the skill's review stages
 
 Follow `superpowers:test-driven-development` for every behavior change unless the user explicitly approves an exception.
 
+**Reject task diffs that are more complex than required; send them back for simplification.**
+
 ---
 
 ## Phase 5 — Verify Against the Issue
@@ -127,6 +131,8 @@ GH issue view <number>
 ```
 
 Do not claim completion from prior output, expected behavior, or a passing subset that does not cover the requested outcome.
+
+**Before finalizing, ensure the full diff is the simplest solution that satisfies the issue.**
 
 ---
 
