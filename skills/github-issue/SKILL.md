@@ -110,6 +110,8 @@ Execute the plan task by task with fresh subagents and the skill's review stages
 
 Follow `superpowers:test-driven-development` for every behavior change unless the user explicitly approves an exception.
 
+**Review each task's diff for overengineering, not just correctness.** When a subagent returns, the review stage must reject a diff that is more complex than the task required — unnecessary abstraction, speculative generality (config, flags, or hooks for cases nobody asked for), premature helpers for a single call site, code that doesn't earn its complexity — and send it back for simplification the same way a failing test would, rather than passing it because it "works." Where a `simplify` skill (or equivalent standalone simplification pass) is available, you may invoke it to perform this check; the requirement stands regardless of whether that skill exists in the environment.
+
 ---
 
 ## Phase 5 — Verify Against the Issue
@@ -123,6 +125,8 @@ GH issue view <number>
 ```
 
 Do not claim completion from prior output, expected behavior, or a passing subset that does not cover the requested outcome.
+
+**Also run a simplicity pass over the whole assembled diff**, not only per-task. Implementer subagents don't see each other's work, so cross-task duplication and compounding complexity only surface once everything is assembled. Review `git diff origin/main...HEAD` for redundant abstraction, repeated logic that should be shared, and config or surface area beyond what the issue required; simplify before finalizing. This is a distinct check from acceptance-criteria coverage — a diff can meet every criterion and still be overengineered. Where a `simplify` skill (or equivalent) is available, you may invoke it over the full diff for this pass.
 
 ---
 
@@ -173,3 +177,4 @@ Never use forced worktree removal, reset, clean, or force-push during post-merge
 - **More than one `Closes #<number>` in the PR body.** Exactly one closing reference.
 - **Leaving the PR in draft past a green Phase 6.** Mark it ready once verification passes.
 - **Treating a merely closed PR as merged.** Only `MERGED` triggers Phase 7 cleanup.
+- **Passing a task diff or the whole diff without a simplicity check.** Phase 4 rejects overengineered task diffs; Phase 5 runs a simplicity pass over the full diff. Meeting acceptance criteria is not enough — a diff that "works" can still be overengineered.
