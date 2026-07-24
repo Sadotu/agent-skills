@@ -45,6 +45,9 @@ GH pr create --draft \
   --body "$(cat <<EOF
 Closes #${issue_number}
 
+## Summary
+_In progress — filled in once design work completes._
+
 ## Design Decisions
 _In progress — filled in once design work completes._
 EOF

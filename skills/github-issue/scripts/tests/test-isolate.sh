@@ -211,7 +211,7 @@ test_case4_happy_path() {
     bash -c "grep -q 'My PR Title' '$GH_LOG'"
 
   local expected_body
-  expected_body=$'Closes #7\n\n## Design Decisions\n_In progress — filled in once design work completes._'
+  expected_body=$'Closes #7\n\n## Summary\n_In progress — filled in once design work completes._\n\n## Design Decisions\n_In progress — filled in once design work completes._'
   local log_content
   log_content="$(cat "$GH_LOG")"
   case "$log_content" in
