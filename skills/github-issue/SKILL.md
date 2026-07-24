@@ -75,6 +75,8 @@ Report the PR URL to the user now — it is the first thing they see, before any
 
 **Prefer the simplest design that satisfies the issue; avoid speculative requirements.**
 
+<!-- Temporary reviewable-push marker. -->
+
 Once the design doc and plan are written, replace the "In progress" placeholder in the PR body with the full log:
 
 ```bash
