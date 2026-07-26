@@ -65,6 +65,33 @@ scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>
 
 Report the PR URL to the user now — it is the first thing they see, before any design question is generated. The PR stays **draft** until Phase 6 marks it ready.
 
+### Baseline-failure triage (unattended override)
+
+`superpowers:using-git-worktrees` verifies a clean test baseline after isolation and, on failure, says to report and ask before proceeding. This workflow runs unattended, so — **for unattended `github-issue` runs only** — it overrides that gate with a narrow, evidence-based procedure. The upstream skill is unchanged; interactive users keep its report-and-ask default. No failure is ever silently ignored, suppressed, excluded, weakened, or dropped from final verification.
+
+When the isolated worktree's baseline verification fails, classify **each** failing test independently:
+
+1. Capture the exact baseline command, the failing test(s), exit status, and relevant (bounded) output from the issue worktree.
+2. Reproduce the same command on a separate, untouched checkout pinned to the branch-base `origin/main` commit (`git merge-base origin/main HEAD`) — never a checkout carrying issue-branch changes or generated state.
+3. Identify the files implicated by the failure: the failing test plus the production/configuration files named by its stack trace, assertion, coverage, or focused investigation.
+4. Compare those files and the failure's behavior against the issue's planned **and** actual change surface (expected tests, production files, configuration, dependencies, shared infrastructure).
+5. Run the classifier once per failure with the gathered evidence:
+
+   ```bash
+   scripts/baseline-triage.sh \
+     --reproduces-on-main <yes|no> \  # step 2 reproduced it on untouched origin/main
+     --overlaps-surface   <yes|no> \  # step 4 found overlap with the change surface
+     --branch-worsened    <yes|no> \  # new, worse, or materially different on the branch
+     --branch-resolved    <yes|no> \  # branch makes it pass/changes it with no reviewed in-scope cause
+     --ambiguous          <yes|no>    # flaky/timeout/environmental/global-setup/unclassifiable
+   ```
+
+   It prints `CONTINUE` (exit 0) only when the failure provably reproduces on untouched `origin/main` and is unrelated on every axis; otherwise `STOP: <reason>` (exit 2). It is fail-closed — missing or unclear evidence stops. Continue the run **only if every** failure returns `CONTINUE`; a single `STOP` stops the run, and you report each classification and ask for direction. One safely classified failure never lets an unrelated or ambiguous one through.
+
+6. For every accepted (`CONTINUE`) failure, add an `Accepted baseline failure` section to the draft PR recording: the command, the exact test, bounded relevant output, the `origin/main` SHA and the issue-branch SHA, the implicated files, the change-surface comparison, and the classifier verdict with rationale. Redact secrets without hiding diagnostic facts; link an artifact if the output is too large.
+
+The classifier only reads evidence — it never runs, excludes, or alters a test. You still supply every judgment; it enforces only the go/no-go combination so an unattended run cannot rationalize past it.
+
 ---
 
 ## Phase 3 — Design and Plan (inside issue worktree)
@@ -132,6 +159,8 @@ GH issue view <number>
 
 Do not claim completion from prior output, expected behavior, or a passing subset that does not cover the requested outcome.
 
+**Re-check every accepted baseline failure.** For each `Accepted baseline failure` recorded in the PR, re-run its recorded command and re-invoke `scripts/baseline-triage.sh` — set `--branch-worsened yes` if the output, failing assertions, or exit/timing behavior changed from the recorded baseline. If any accepted failure now regresses, or the actual implementation expanded the change surface so `--overlaps-surface` is now `yes`, stop, do **not** mark the PR ready, and report. Otherwise preserve the confirmed-unchanged evidence in the PR verification summary. Never convert, suppress, or exclude a failure to finish.
+
 **Before finalizing, ensure the full diff is the simplest solution that satisfies the issue.**
 
 ---
@@ -184,3 +213,4 @@ Never use forced worktree removal, reset, clean, or force-push during post-merge
 - **Generic `## Summary`.** Problem must reflect the issue; Approach must reflect the diff.
 - **Leaving the PR in draft past a green Phase 6.** Mark it ready once verification passes.
 - **Treating a merely closed PR as merged.** Only `MERGED` triggers Phase 7 cleanup.
+- **Silently accepting or suppressing a baseline failure.** In an unattended run a pre-existing baseline failure may be passed only when `scripts/baseline-triage.sh` returns `CONTINUE`, it is documented in the PR, and it is re-verified in Phase 5 — never ignored, excluded, weakened, converted to a pass, or marked ready on a regression.
