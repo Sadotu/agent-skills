@@ -26,7 +26,7 @@ git rev-parse --is-inside-work-tree >/dev/null
 plain_porcelain="$(git status --porcelain)"
 
 if [ -z "$plain_porcelain" ]; then
-  echo "(clean — no staged or untracked changes)"
+  echo "(clean — no staged, unstaged, or untracked changes)"
   exit 0
 fi
 
