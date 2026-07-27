@@ -67,13 +67,13 @@ Report the PR URL to the user now — it is the first thing they see, before any
 
 ### Dirty-tree triage (read-only, when the guard trips)
 
-If `scripts/isolate.sh` exits nonzero, check `git status --porcelain` in the primary worktree yourself — a nonempty result means the dirty-primary-tree guard is what tripped (as opposed to the wrong-branch or diverged-`main` guards, which run earlier and would also report nonzero). When it's the dirty-tree guard:
+If `scripts/isolate.sh` exits nonzero, check both `git branch --show-current` and `git status --porcelain` in the primary worktree yourself — if you're on `main` and porcelain is nonempty, the dirty-primary-tree guard is what tripped: the wrong-branch guard runs first and would have failed there instead, and the diverged-`main` guards run after the dirty-tree check so they're unreachable while the tree is still dirty. When it's the dirty-tree guard:
 
 ```bash
 scripts/diagnose-dirty-main.sh
 ```
 
-This is read-only — it never stashes, resets, or cleans anything. It runs a separate `git status --porcelain --ignored` to break the tree into staged changes (via `git diff --cached --name-status`), genuinely untracked paths, and already-ignored paths, then runs `git check-ignore -v` per untracked entry to tell "genuinely untracked scaffold `.gitignore` doesn't cover yet" apart from "should already be ignored but isn't on this checkout." Report this breakdown to the user and ask for direction — the pre-existing state on primary `main` is not the current issue's to resolve, so do not stash, reset, or clean it away just to get past the guard.
+This is read-only — it never stashes, resets, or cleans anything. It runs a separate `git status --porcelain --ignored` to break the tree into staged changes (via `git diff --cached --name-status`), unstaged changes to already-tracked files (via `git diff --name-status`), genuinely untracked paths, and already-ignored paths, then runs `git check-ignore -v` per untracked entry to tell "genuinely untracked scaffold `.gitignore` doesn't cover yet" apart from "should already be ignored but isn't on this checkout." Report this breakdown to the user and ask for direction — the pre-existing state on primary `main` is not the current issue's to resolve, so do not stash, reset, or clean it away just to get past the guard.
 
 ### Baseline-failure triage (unattended override)
 

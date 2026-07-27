@@ -102,6 +102,34 @@ repo="$(new_repo)"
 code=$?
 [ "$code" -ne 0 ] && ok "case6: nonzero exit on usage error" || fail "case6: nonzero exit on usage error (code $code)"
 
+# --- case 7: unstaged modification to a tracked file shows under Unstaged changes ---
+repo="$(new_repo)"
+echo "tracked" > "$repo/tracked.txt"
+git -C "$repo" add tracked.txt
+git -C "$repo" commit -q -m init
+echo "modified" > "$repo/tracked.txt"
+out="$(cd "$repo" && "$DIAGNOSE" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && ok "case7: exits 0" || fail "case7: exits 0 (code $code)"
+assert_contains "case7: unstaged modification reported" "$out" "tracked.txt"
+assert_contains "case7: staged changes still none" "$out" "$(printf '=== Staged changes ===\n(none)')"
+assert_contains "case7: untracked paths still none" "$out" "$(printf '=== Untracked paths ===\n(none)')"
+
+# --- case 8: quoted/space-containing ignored path correctly reported as ignored ---
+repo="$(new_repo)"
+echo "tracked" > "$repo/tracked.txt"
+printf 'build dir/\n' > "$repo/.gitignore"
+git -C "$repo" add tracked.txt .gitignore
+git -C "$repo" commit -q -m init
+mkdir -p "$repo/build dir"
+echo "y" > "$repo/build dir/y.txt"
+echo "z" > "$repo/other.txt"
+out="$(cd "$repo" && "$DIAGNOSE" 2>&1)"
+assert_contains "case8: quoted ignored path reported as ignored" "$out" "build dir/: ignored"
+case "$out" in
+  *'build dir/": NOT ignored'*|*'build dir/: NOT ignored'*) fail "case8: quoted ignored path NOT misreported as NOT ignored" ;;
+  *) ok "case8: quoted ignored path NOT misreported as NOT ignored" ;;
+esac
+
 echo "1..$((PASS + FAIL))"
 echo "# pass $PASS fail $FAIL"
 [ "$FAIL" -eq 0 ]
