@@ -60,7 +60,7 @@ out="$(cd "$repo" && "$DIAGNOSE" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && ok "case2: exits 0" || fail "case2: exits 0 (code $code)"
 assert_contains "case2: staged deletion reported" "$out" "old-file.txt"
 
-# --- case 3: untracked path matched by .gitignore reported as ignored ---
+# --- case 3: tree with only ignored paths is clean (no staged/untracked non-ignored) ---
 repo="$(new_repo)"
 echo "tracked" > "$repo/tracked.txt"
 printf 'ignored-scaffold/\n' > "$repo/.gitignore"
@@ -68,8 +68,9 @@ git -C "$repo" add tracked.txt .gitignore
 git -C "$repo" commit -q -m init
 mkdir -p "$repo/ignored-scaffold"
 echo "x" > "$repo/ignored-scaffold/x.txt"
-out="$(cd "$repo" && "$DIAGNOSE" 2>&1)"
-assert_contains "case3: ignored path reported as ignored" "$out" "ignored-scaffold/: ignored"
+out="$(cd "$repo" && "$DIAGNOSE" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && ok "case3: only ignored paths exits 0 (clean)" || fail "case3: only ignored paths exits 0 (code $code)"
+assert_contains "case3: reports clean when only ignored" "$out" "clean"
 
 # --- case 4: untracked path with no matching rule reported as NOT ignored ---
 repo="$(new_repo)"

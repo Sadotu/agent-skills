@@ -20,12 +20,14 @@ fi
 
 git rev-parse --is-inside-work-tree >/dev/null
 
-porcelain="$(git status --porcelain --ignored)"
+plain_porcelain="$(git status --porcelain)"
 
-if [ -z "$porcelain" ]; then
+if [ -z "$plain_porcelain" ]; then
   echo "(clean — no staged or untracked changes)"
   exit 0
 fi
+
+porcelain="$(git status --porcelain --ignored)"
 
 echo "=== Staged changes ==="
 staged="$(git diff --cached --name-status)"
