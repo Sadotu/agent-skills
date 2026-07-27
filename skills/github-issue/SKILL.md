@@ -65,6 +65,16 @@ scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>
 
 Report the PR URL to the user now — it is the first thing they see, before any design question is generated. The PR stays **draft** until Phase 6 marks it ready.
 
+### Dirty-tree triage (read-only, when the guard trips)
+
+If `scripts/isolate.sh` exits nonzero, check both `git branch --show-current` and `git status --porcelain` in the primary worktree yourself — if you're on `main` and porcelain is nonempty, the dirty-primary-tree guard is what tripped: the wrong-branch guard runs first and would have failed there instead, and the diverged-`main` guards run after the dirty-tree check so they're unreachable while the tree is still dirty. When it's the dirty-tree guard:
+
+```bash
+scripts/diagnose-dirty-main.sh
+```
+
+This is read-only — it never stashes, resets, or cleans anything. It runs a separate `git status --porcelain --ignored` to break the tree into staged changes (via `git diff --cached --name-status`), unstaged changes to already-tracked files (via `git diff --name-status`), genuinely untracked paths, and already-ignored paths, then runs `git check-ignore -v` per untracked entry to tell "genuinely untracked scaffold `.gitignore` doesn't cover yet" apart from "should already be ignored but isn't on this checkout." Report this breakdown to the user and ask for direction — the pre-existing state on primary `main` is not the current issue's to resolve, so do not stash, reset, or clean it away just to get past the guard.
+
 ### Baseline-failure triage (unattended override)
 
 `superpowers:using-git-worktrees` verifies a clean test baseline after isolation and, on failure, says to report and ask before proceeding. This workflow runs unattended, so — **for unattended `github-issue` runs only** — it overrides that gate with a narrow, evidence-based procedure. The upstream skill is unchanged; interactive users keep its report-and-ask default. No failure is ever silently ignored, suppressed, excluded, weakened, or dropped from final verification.
@@ -208,6 +218,7 @@ Never use forced worktree removal, reset, clean, or force-push during post-merge
 ## Red Flags — STOP
 
 - **Branching from local `main` or a feature branch.** Always branch from freshly-fetched `origin/main`; if local `main` diverged or the primary worktree is dirty, stop without mutating it.
+- **Running `git stash -f`, `git reset --hard`, or `git clean -f` on primary `main` to force past a tripped dirty-tree guard.** Run `scripts/diagnose-dirty-main.sh`, report the breakdown, and ask — pre-existing main state isn't the current issue's job to resolve.
 - **Writing or committing issue artifacts in the primary worktree.** After isolation, every write and commit happens in `<worktree-path>` — never on primary `main`.
 - **More than one `Closes #<number>` in the PR body.** Exactly one closing reference.
 - **Generic `## Summary`.** Problem must reflect the issue; Approach must reflect the diff.
