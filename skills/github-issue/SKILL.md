@@ -73,7 +73,7 @@ If `scripts/isolate.sh` exits nonzero, check `git status --porcelain` in the pri
 scripts/diagnose-dirty-main.sh
 ```
 
-This is read-only — it never stashes, resets, or cleans anything. It breaks `git status --porcelain` into staged changes (via `git diff --cached --name-status`) and untracked paths, and for each untracked path runs `git check-ignore -v` to tell "genuinely untracked scaffold `.gitignore` doesn't cover yet" apart from "should already be ignored but isn't on this checkout." Report this breakdown to the user and ask for direction — the pre-existing state on primary `main` is not the current issue's to resolve, so do not stash, reset, or clean it away just to get past the guard.
+This is read-only — it never stashes, resets, or cleans anything. It runs a separate `git status --porcelain --ignored` to break the tree into staged changes (via `git diff --cached --name-status`), genuinely untracked paths, and already-ignored paths, then runs `git check-ignore -v` per untracked entry to tell "genuinely untracked scaffold `.gitignore` doesn't cover yet" apart from "should already be ignored but isn't on this checkout." Report this breakdown to the user and ask for direction — the pre-existing state on primary `main` is not the current issue's to resolve, so do not stash, reset, or clean it away just to get past the guard.
 
 ### Baseline-failure triage (unattended override)
 
