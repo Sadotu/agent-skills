@@ -46,19 +46,22 @@ is_stray_phase_label() {
 
 if printf '%s\n' "$issue_labels" | grep -qxF 'agent-running'; then
   # Managed run: issue-orchestrator owns lifecycle. Leave the PR draft;
-  # swap the phase label for agent-review on both issue and PR.
+  # swap the phase label for agent-review on both issue and PR. Add
+  # agent-review BEFORE removing strays, so a fault mid-way always leaves
+  # the entity holding at least agent-review rather than no phase label.
   GH label create agent-review --force >/dev/null 2>&1 || true
 
+  GH issue edit "$issue_number" --add-label agent-review
   while IFS= read -r label; do
     [ -n "$label" ] || continue
     if is_stray_phase_label "$label"; then
       GH issue edit "$issue_number" --remove-label "$label"
     fi
   done <<< "$issue_labels"
-  GH issue edit "$issue_number" --add-label agent-review
 
   GH pr edit "$pr_number" --add-label agent-running
 
+  GH pr edit "$pr_number" --add-label agent-review
   pr_labels="$(GH pr view "$pr_number" --json labels -q '.labels[].name')"
   while IFS= read -r label; do
     [ -n "$label" ] || continue
@@ -66,8 +69,10 @@ if printf '%s\n' "$issue_labels" | grep -qxF 'agent-running'; then
       GH pr edit "$pr_number" --remove-label "$label"
     fi
   done <<< "$pr_labels"
-  GH pr edit "$pr_number" --add-label agent-review
+
+  echo "managed run: PR #$pr_number left draft, agent-review applied to issue #$issue_number and PR #$pr_number" >&2
 else
   # Manual run: unchanged current behavior.
   GH pr ready "$pr_number"
+  echo "manual run: PR #$pr_number marked ready" >&2
 fi

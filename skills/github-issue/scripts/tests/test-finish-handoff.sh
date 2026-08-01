@@ -109,6 +109,21 @@ test_case1_manual() {
 
 test_case1_manual
 
+# --- Case 1c: manual run with unrelated labels already present — proves
+# the manual branch is genuinely label-blind (makes zero label calls),
+# not just untested in the presence of labels. ---
+test_case1c_manual_with_labels_present() {
+  new_fixture
+  STUB_ISSUE_LABELS="bug,agent-implementing" run_handoff 30 30 >"$BASE/out.log" 2>&1
+  local rc=$?
+  assert_eq "case1c: exits zero on manual path" 0 "$rc"
+  assert_contains "case1c: pr ready called" "$GH_LOG" "pr ready 30"
+  assert_not_contains "case1c: no add-label calls" "$GH_LOG" "add-label"
+  assert_not_contains "case1c: no remove-label calls" "$GH_LOG" "remove-label"
+}
+
+test_case1c_manual_with_labels_present
+
 # --- Case 1b: managed run (agent-running present on the issue) ---
 # The managed branch is fully implemented and succeeds on a managed run, so
 # this proves detection: the script must branch away from the manual path
@@ -151,6 +166,22 @@ test_case3_managed_pr_stray_label() {
 }
 
 test_case2_managed
+
+# --- Case 2c: managed run, issue has an unrelated non-agent-* label — the
+# stray-removal loop must leave it alone; only agent-* phase labels (other
+# than agent-running/agent-review) are strays. ---
+test_case2c_leaves_unrelated_label_alone() {
+  new_fixture
+  STUB_ISSUE_LABELS="agent-running,agent-implementing,bug" STUB_PR_LABELS="" \
+    run_handoff 31 31 >"$BASE/out.log" 2>&1
+  local rc=$?
+  assert_eq "case2c: exits zero on managed path" 0 "$rc"
+  assert_contains "case2c: agent-* stray still removed from issue" "$GH_LOG" "issue edit 31 --remove-label agent-implementing"
+  assert_not_contains "case2c: unrelated non-agent-* label left alone" "$GH_LOG" "remove-label bug"
+}
+
+test_case2c_leaves_unrelated_label_alone
+
 test_case3_managed_pr_stray_label
 
 # --- Case 4: rerun — running the managed path twice is safe and repeats
@@ -169,6 +200,7 @@ test_case4_rerun() {
   assert_eq "case4: rerun exits zero" 0 "$rc2"
   assert_contains "case4: rerun still adds agent-review to issue" "$GH_LOG" "issue edit 33 --add-label agent-review"
   assert_contains "case4: rerun still adds agent-review to PR" "$GH_LOG" "pr edit 33 --add-label agent-review"
+  assert_not_contains "case4: rerun issues no remove-label calls (nothing stray on a converged rerun)" "$GH_LOG" "remove-label"
 }
 
 test_case4_rerun
