@@ -153,5 +153,47 @@ test_case3_managed_pr_stray_label() {
 test_case2_managed
 test_case3_managed_pr_stray_label
 
+# --- Case 4: rerun — running the managed path twice is safe and repeats
+# the same calls (gh's label add/remove are idempotent, so no bespoke
+# state tracking is needed in the script itself). ---
+test_case4_rerun() {
+  new_fixture
+  STUB_ISSUE_LABELS="agent-running,agent-implementing" STUB_PR_LABELS="" \
+    run_handoff 33 33 >"$BASE/out1.log" 2>&1
+  local rc1=$?
+  : > "$GH_LOG"
+  STUB_ISSUE_LABELS="agent-running,agent-implementing" STUB_PR_LABELS="" \
+    run_handoff 33 33 >"$BASE/out2.log" 2>&1
+  local rc2=$?
+  assert_eq "case4: first run exits zero" 0 "$rc1"
+  assert_eq "case4: rerun exits zero" 0 "$rc2"
+  assert_contains "case4: rerun still adds agent-review to issue" "$GH_LOG" "issue edit 33 --add-label agent-review"
+  assert_contains "case4: rerun still adds agent-review to PR" "$GH_LOG" "pr edit 33 --add-label agent-review"
+}
+
+test_case4_rerun
+
+# --- Case 5: partial failure — first call fails mid-way (simulated PR
+# edit failure), script exits nonzero without reaching pr ready; rerun
+# with the fault cleared completes cleanly. ---
+test_case5_partial_failure() {
+  new_fixture
+  FAIL_ON="pr edit 34 --add-label agent-running" STUB_ISSUE_LABELS="agent-running" STUB_PR_LABELS="" \
+    run_handoff 34 34 >"$BASE/out1.log" 2>&1
+  local rc1=$?
+  assert_eq "case5: first run fails at the injected fault" 1 "$rc1"
+  assert_not_contains "case5: agent-review never added to issue before the fault clears" "$GH_LOG" "pr edit 34 --add-label agent-review"
+
+  : > "$GH_LOG"
+  STUB_ISSUE_LABELS="agent-running" STUB_PR_LABELS="" \
+    run_handoff 34 34 >"$BASE/out2.log" 2>&1
+  local rc2=$?
+  assert_eq "case5: rerun with fault cleared exits zero" 0 "$rc2"
+  assert_contains "case5: rerun completes agent-review on issue" "$GH_LOG" "issue edit 34 --add-label agent-review"
+  assert_contains "case5: rerun completes agent-review on PR" "$GH_LOG" "pr edit 34 --add-label agent-review"
+}
+
+test_case5_partial_failure
+
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
