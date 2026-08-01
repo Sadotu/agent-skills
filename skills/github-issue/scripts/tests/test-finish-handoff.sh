@@ -110,23 +110,48 @@ test_case1_manual() {
 test_case1_manual
 
 # --- Case 1b: managed run (agent-running present on the issue) ---
-# The managed branch itself isn't implemented yet (finish-handoff.sh just
-# prints "not implemented yet" and exits 1 for now), so this only proves
-# detection: the script must branch away from the manual path and must
-# never call `gh pr ready`.
+# The managed branch is fully implemented and succeeds on a managed run, so
+# this proves detection: the script must branch away from the manual path
+# (exit zero, no `gh pr ready` call) rather than taking the manual path.
 test_case1b_detects_managed_signal() {
   new_fixture
   STUB_ISSUE_LABELS="agent-running" run_handoff 30 30 >"$BASE/out.log" 2>&1
   local rc=$?
-  if [ "$rc" -ne 0 ]; then
-    ok "case1b: exits nonzero on managed path"
-  else
-    fail "case1b: exits nonzero on managed path (got rc=0)"
-  fi
+  assert_eq "case1b: exits zero on managed path" 0 "$rc"
   assert_not_contains "case1b: pr ready never called" "$GH_LOG" "pr ready"
 }
 
 test_case1b_detects_managed_signal
+
+# --- Case 2: managed run (issue has agent-running + a stray phase label) ---
+test_case2_managed() {
+  new_fixture
+  STUB_ISSUE_LABELS="agent-running,agent-implementing" STUB_PR_LABELS="" \
+    run_handoff 31 31 >"$BASE/out.log" 2>&1
+  local rc=$?
+  assert_eq "case2: exits zero on managed path" 0 "$rc"
+  assert_not_contains "case2: pr ready never called" "$GH_LOG" "pr ready"
+  assert_contains "case2: agent-review label ensured to exist" "$GH_LOG" "label create agent-review"
+  assert_contains "case2: stray phase label removed from issue" "$GH_LOG" "issue edit 31 --remove-label agent-implementing"
+  assert_contains "case2: agent-review added to issue" "$GH_LOG" "issue edit 31 --add-label agent-review"
+  assert_not_contains "case2: agent-running never removed from issue" "$GH_LOG" "issue edit 31 --remove-label agent-running"
+  assert_contains "case2: agent-running added to PR" "$GH_LOG" "pr edit 31 --add-label agent-running"
+  assert_contains "case2: agent-review added to PR" "$GH_LOG" "pr edit 31 --add-label agent-review"
+}
+
+# --- Case 3: managed run, PR already carries a stray phase label too ---
+test_case3_managed_pr_stray_label() {
+  new_fixture
+  STUB_ISSUE_LABELS="agent-running" STUB_PR_LABELS="agent-implementing" \
+    run_handoff 32 32 >"$BASE/out.log" 2>&1
+  local rc=$?
+  assert_eq "case3: exits zero" 0 "$rc"
+  assert_contains "case3: stray phase label removed from PR" "$GH_LOG" "pr edit 32 --remove-label agent-implementing"
+  assert_contains "case3: agent-review added to PR" "$GH_LOG" "pr edit 32 --add-label agent-review"
+}
+
+test_case2_managed
+test_case3_managed_pr_stray_label
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

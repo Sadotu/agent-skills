@@ -32,9 +32,42 @@ source "$script_dir/lib/gh.sh"
 
 issue_labels="$(GH issue view "$issue_number" --json labels -q '.labels[].name')"
 
+is_stray_phase_label() {
+  # Any agent-* label that isn't the durable agent-running marker or the
+  # agent-review target label counts as "the phase label" to replace —
+  # github-issue doesn't own the orchestrator's phase-label vocabulary,
+  # so it can't hardcode a specific prior name.
+  case "$1" in
+    agent-running|agent-review) return 1 ;;
+    agent-*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 if printf '%s\n' "$issue_labels" | grep -qxF 'agent-running'; then
-  echo "managed run (issue #$issue_number carries agent-running) — not implemented yet" >&2
-  exit 1
+  # Managed run: issue-orchestrator owns lifecycle. Leave the PR draft;
+  # swap the phase label for agent-review on both issue and PR.
+  GH label create agent-review --force >/dev/null 2>&1 || true
+
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    if is_stray_phase_label "$label"; then
+      GH issue edit "$issue_number" --remove-label "$label"
+    fi
+  done <<< "$issue_labels"
+  GH issue edit "$issue_number" --add-label agent-review
+
+  GH pr edit "$pr_number" --add-label agent-running
+
+  pr_labels="$(GH pr view "$pr_number" --json labels -q '.labels[].name')"
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    if is_stray_phase_label "$label"; then
+      GH pr edit "$pr_number" --remove-label "$label"
+    fi
+  done <<< "$pr_labels"
+  GH pr edit "$pr_number" --add-label agent-review
 else
+  # Manual run: unchanged current behavior.
   GH pr ready "$pr_number"
 fi
