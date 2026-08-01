@@ -129,7 +129,7 @@ EOF
 )"
 ```
 
-Derive **Problem** from the issue and **Approach** from the chosen design; both must be specific, not boilerplate. Phase 6 updates **Approach** if the implementation differs. The PR body is the asynchronous record of the design conversation. Then use `superpowers:writing-plans` to produce the plan.
+Derive **Problem** from the issue and **Approach** from the chosen design; both must be specific, not boilerplate. **Problem** states observable application/user-facing pain — what someone hits — without naming the fix; no implementation nouns. **Approach** states the behavior-level solution in minimal implementation jargon and names deliberate non-goals (what this PR intentionally does not do). Phase 6 updates **Approach** if the implementation differs. The PR body is the asynchronous record of the design conversation. Then use `superpowers:writing-plans` to produce the plan.
 
 Write two artifacts inside `<worktree-path>` as **session-local working files** — the plan drives Phase 4, the design records the decisions. They must **not** land in the PR diff, so Git-exclude them before writing (Phase 7 deletes them with the worktree):
 
@@ -194,7 +194,7 @@ If stale, `git rebase origin/main` (resolve conflicts, drop already-merged commi
 
 - Push the final commits to the existing branch.
 - Update the existing PR body: make the Summary's **Approach** match the actual diff, then append verification results against the acceptance criteria below Design Decisions. Preserve the single `Closes #<number>` line and Summary block. Because the spec and plan are session-local, do not link their paths.
-- Mark it ready: `GH pr ready <pr-number>`.
+- Hand off: `scripts/finish-handoff.sh <pr-number> <number>`. On a manual run (the linked issue has no `agent-running` label) this marks the PR ready exactly as before. On a managed run (issue-orchestrator already applied `agent-running` to the linked issue) this instead keeps the PR draft, adds `agent-running` to the PR, and replaces any other phase label with `agent-review` on both issue and PR — issue-orchestrator owns review/CI/merge from there. Safe to rerun after a partial failure; it converges to the same label state.
 - Report the branch name and PR URL.
 
 Do not merge unless the user explicitly requests it.
@@ -223,5 +223,6 @@ Never use forced worktree removal, reset, clean, or force-push during post-merge
 - **More than one `Closes #<number>` in the PR body.** Exactly one closing reference.
 - **Generic `## Summary`.** Problem must reflect the issue; Approach must reflect the diff.
 - **Leaving the PR in draft past a green Phase 6.** Mark it ready once verification passes.
+- **Calling `GH pr ready` directly in Phase 6.** Always go through `scripts/finish-handoff.sh` so a managed run's PR correctly stays draft.
 - **Treating a merely closed PR as merged.** Only `MERGED` triggers Phase 7 cleanup.
 - **Silently accepting or suppressing a baseline failure.** In an unattended run a pre-existing baseline failure may be passed only when `scripts/baseline-triage.sh` returns `CONTINUE`, it is documented in the PR, and it is re-verified in Phase 5 — never ignored, excluded, weakened, converted to a pass, or marked ready on a regression.
