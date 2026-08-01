@@ -39,10 +39,12 @@ assert_not_contains() {
   if grep -qF "$pattern" "$file"; then fail "$desc (unexpectedly found [$pattern] in $file)"; else ok "$desc"; fi
 }
 
-# write_gh_shim <path> — fake `gh` that logs `$*` to $GH_LOG and returns
-# canned JSON for label queries. STUB_ISSUE_LABELS / STUB_PR_LABELS are
-# comma-separated label names. FAIL_ON, if set, is a substring of the
-# invocation that should make this call exit 1 (simulates partial failure).
+# write_gh_shim <path> — fake `gh` that logs `$*` to $GH_LOG and, for label
+# queries, prints one label name per line (matching what the real `gh`'s
+# `-q '.labels[].name'` jq filter would produce). STUB_ISSUE_LABELS /
+# STUB_PR_LABELS are comma-separated label names. FAIL_ON, if set, is a
+# substring of the invocation that should make this call exit 1 (simulates
+# partial failure).
 write_gh_shim() {
   cat > "$1" <<'SHIM'
 #!/usr/bin/env bash
@@ -56,23 +58,15 @@ case "$1 $2" in
     ;;
   "issue view")
     IFS=',' read -ra labels <<< "${STUB_ISSUE_LABELS:-}"
-    printf '{"labels":['
-    for i in "${!labels[@]}"; do
-      [ -n "${labels[$i]}" ] || continue
-      [ "$i" -gt 0 ] && printf ','
-      printf '{"name":"%s"}' "${labels[$i]}"
+    for l in "${labels[@]}"; do
+      [ -n "$l" ] && echo "$l"
     done
-    printf ']}\n'
     ;;
   "pr view")
     IFS=',' read -ra labels <<< "${STUB_PR_LABELS:-}"
-    printf '{"labels":['
-    for i in "${!labels[@]}"; do
-      [ -n "${labels[$i]}" ] || continue
-      [ "$i" -gt 0 ] && printf ','
-      printf '{"name":"%s"}' "${labels[$i]}"
+    for l in "${labels[@]}"; do
+      [ -n "$l" ] && echo "$l"
     done
-    printf ']}\n'
     ;;
   *)
     :
@@ -114,6 +108,25 @@ test_case1_manual() {
 }
 
 test_case1_manual
+
+# --- Case 1b: managed run (agent-running present on the issue) ---
+# The managed branch itself isn't implemented yet (finish-handoff.sh just
+# prints "not implemented yet" and exits 1 for now), so this only proves
+# detection: the script must branch away from the manual path and must
+# never call `gh pr ready`.
+test_case1b_detects_managed_signal() {
+  new_fixture
+  STUB_ISSUE_LABELS="agent-running" run_handoff 30 30 >"$BASE/out.log" 2>&1
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    ok "case1b: exits nonzero on managed path"
+  else
+    fail "case1b: exits nonzero on managed path (got rc=0)"
+  fi
+  assert_not_contains "case1b: pr ready never called" "$GH_LOG" "pr ready"
+}
+
+test_case1b_detects_managed_signal
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
