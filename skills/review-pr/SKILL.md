@@ -5,11 +5,11 @@ description: Use for a single, read-only application-coherence and drift review 
 
 # Review PR — Read-Only Application Drift Review
 
-One full, read-only review pass against a linked issue and PR, checked
-against a stable snapshot. This skill never edits code, approves, merges,
-or changes draft/label state — it only ever posts plain PR comments. It is
-independent of `issue-orchestrator`'s scheduling and repair behavior: it
-takes an issue number and PR number and performs exactly one pass.
+One read-only review pass against a linked issue + PR, checked against a
+stable snapshot. Never edits code, approves, merges, or changes draft/label
+state — only posts plain PR comments. Independent of `issue-orchestrator`'s
+scheduling/repair: takes an issue number and PR number, performs exactly
+one pass.
 
 **Preconditions:**
 
@@ -33,11 +33,10 @@ fi
 
 ## Phase 1 — Resolve inputs
 
-Requires an issue number and a PR number (from arguments, or ask if not
-given). Confirm the PR actually closes/references the issue — read the PR
-body (`GH pr view <pr> --json body`) and check for a `Closes #<issue>` (or
-equivalent) reference. If the PR doesn't reference the issue, stop and ask;
-this skill reviews one linked issue+PR pair, not an arbitrary PR.
+Needs an issue number and PR number (args, or ask). Confirm the PR
+references the issue: `GH pr view <pr> --json body`, check for `Closes
+#<issue>` (or equivalent). If it doesn't, stop and ask — this reviews one
+linked pair, not an arbitrary PR.
 
 ## Phase 2 — Capture the snapshot
 
@@ -46,17 +45,16 @@ scripts/snapshot.sh <pr-number> <issue-number>
 ```
 
 Prints `{"issue":N,"pr":N,"head":"sha","base":"sha","issueUpdatedAt":"...","prUpdatedAt":"...","fingerprint":"hex"}`.
-Record the `fingerprint` — it is this pass's snapshot identity. Everything
-from here on is judged against exactly this head/base/issue-body/PR-body;
-`scripts/publish-review.sh` re-checks it before posting, so a mid-review
-edit to any of those four things safely aborts the pass rather than posting
-stale findings.
+Record `fingerprint` — this pass's snapshot identity. Everything below is
+judged against exactly this head/base/issue-body/PR-body; `publish-review.sh`
+re-checks it before posting, so a mid-review edit to any of those four
+safely aborts instead of posting stale findings.
 
 ## Phase 3 — Read-only inspection
 
-Get a disposable, detached look at the application at the PR's head commit
-— never the primary worktree, never a branch checkout (so nothing can
-accidentally be committed to it):
+Disposable, detached look at the app at the PR's head commit — never the
+primary worktree, never a branch checkout, so nothing can accidentally get
+committed:
 
 ```bash
 git fetch origin
@@ -64,14 +62,13 @@ tmp_review_dir="$(mktemp -d)"
 git worktree add --detach "$tmp_review_dir" <head-sha>
 ```
 
-Read, in this order: the issue body (the spec/acceptance criteria), the PR
-body (Summary, Approach, Design Decisions Q&A), the diff (`GH pr diff
-<pr-number>` or `git -C "$tmp_review_dir" diff <base-sha> <head-sha>`), and
-the surrounding application code in `$tmp_review_dir` at head — conventions,
-call sites, related modules — enough to judge coherence, not just the diff
-in isolation.
+Read, in order: issue body (spec/acceptance criteria), PR body (Summary,
+Approach, Design Decisions Q&A), the diff (`GH pr diff <pr-number>` or `git
+-C "$tmp_review_dir" diff <base-sha> <head-sha>`), and surrounding app code
+in `$tmp_review_dir` at head — conventions, call sites, related modules.
+Enough to judge coherence, not just the diff alone.
 
-When done, always clean up regardless of outcome:
+Always clean up, success or failure:
 
 ```bash
 git worktree remove "$tmp_review_dir"
@@ -79,8 +76,8 @@ git worktree remove "$tmp_review_dir"
 
 ## Phase 4 — Analyze for drift
 
-Review for exactly these categories (per the issue's scope) — and nothing
-else unless it affects one of these relationships:
+Review for exactly these categories — nothing else unless it bears on one
+of them:
 
 - **Scope drift** — does the PR's actual change surface match what the issue asked for?
 - **Description drift** — does the diff match the PR's own Summary/Approach, the Design Decisions Q&A, and any claimed behavior?
@@ -90,26 +87,24 @@ else unless it affects one of these relationships:
 - **Orphaned temporary code** — compatibility shims, feature flags, TODOs, or duplicate code paths introduced without a visible removal plan.
 - **Unjustified complexity** — complexity whose delivered value doesn't justify it.
 
-Do **not** repeat ordinary correctness, style, security, or test feedback
+Do not repeat ordinary correctness, style, security, or test feedback
 unless it bears on one of the categories above.
 
-For each finding, capture: concrete evidence (file:line, quoted diff/code),
-impact, and a recommended action. Classify each as **blocking** or
-**non-blocking**. Overall verdict is `BLOCKING` if any finding is blocking,
-otherwise `PASS`.
+Each finding: concrete evidence (file:line, quoted diff/code), impact,
+recommended action, classified **blocking** or **non-blocking**. Verdict is
+`BLOCKING` if any finding is blocking, else `PASS`.
 
-If concrete evidence (not speculation) implicates another open PR — e.g. it
-names another PR, or duplicates/overlaps a change also present in another
-open PR you can see — note it for cross-linking in Phase 7.
+Concrete evidence implicating another open PR (named, or an
+overlapping/duplicate change you can see) — note for cross-linking in
+Phase 7.
 
 ## Phase 5 — Compose the comment
 
-Write the review to a file. Include: reviewed head/base SHAs, issue and PR
-update timestamps (from the Phase 2 snapshot), the pass number (filled in
-automatically by the publish script — reference it as "pass N" once you
-have the script's output), every blocking and non-blocking finding with its
-evidence/impact/recommended action, the clean areas (what's fine, so a
-human doesn't have to re-check them), and the overall verdict.
+Write the review to a file: reviewed head/base SHAs, issue/PR update
+timestamps (from Phase 2), pass number (filled in by the publish script —
+reference "pass N" once you have its output), every finding with
+evidence/impact/action, clean areas (what's fine, so a human doesn't
+re-check it), overall verdict.
 
 ## Phase 6 — Publish
 
@@ -117,35 +112,26 @@ human doesn't have to re-check them), and the overall verdict.
 scripts/publish-review.sh <pr-number> <issue-number> <fingerprint-from-phase-2> <PASS|BLOCKING> <body-file>
 ```
 
-- **Exit 0** — posted. The marker JSON (including the real pass number and
-  the posted comment's URL) is printed to stdout; report the PR comment
-  URL/pass number to the user.
-- **Exit 3 (stale)** — the issue or PR changed since Phase 2's snapshot was
-  captured. Do not retry with the same body — restart from Phase 2 with a
-  fresh snapshot; if the change is substantive, the analysis in Phase 4 may
-  need to change too.
-- **Exit 4 (duplicate)** — this exact snapshot was already reviewed; no new
-  comment is needed. Report convergence, not an error.
-- **Any other nonzero exit** — a genuine script error (e.g. bad arguments).
-  Stop and report the error rather than retrying blindly.
+- **Exit 0** — posted; marker JSON (pass number, comment URL) on stdout — report URL/pass to the user.
+- **Exit 3 (stale)** — issue/PR changed since Phase 2's snapshot. Don't retry with the same body — restart from Phase 2 with a fresh snapshot; a substantive change may need re-analysis (Phase 4) too.
+- **Exit 4 (duplicate)** — already reviewed this exact snapshot; no new comment needed. Report convergence, not an error.
+- **Any other nonzero exit** — genuine script error (e.g. bad args). Stop and report, don't retry blindly.
 
 Note: on a very long-lived PR, `gh pr view --json comments` may not return
-the full comment history (GitHub API pagination), so pass numbering and
-duplicate detection are best-effort in that case — this is a documented
-limitation, not something this skill codes around.
+full history (API pagination) — pass numbering/duplicate detection are
+best-effort there; documented limitation, not coded around.
 
-Note: markers are only recognized when authored by the same `gh`-authenticated
-identity that is running this review — this is deliberate (it's what stops a
-PR commenter from forging a marker to suppress or fake a review), but it also
-means a devcontainer (GitHub App) pass and a local `gh auth login` (human)
-pass never see each other's markers on the same PR; pass numbering resets and
-a prior pass is not recognized as a duplicate across a change of identity.
+Note: markers are only recognized when authored by the same
+`gh`-authenticated identity running the review — deliberate (stops a PR
+commenter forging a marker to suppress/fake a review), but means a
+devcontainer (App) pass and a local human `gh auth login` pass never see
+each other's markers: pass numbering resets, no duplicate detection across
+an identity change.
 
 ## Phase 7 — Cross-link affected PRs
 
-For each finding from Phase 4 that names or is concretely evidenced against
-another open PR, write that finding to its own file and run, once per
-affected PR:
+For each Phase 4 finding naming/evidencing another open PR, write it to its
+own file and run, once per affected PR:
 
 ```bash
 scripts/publish-crosslink.sh <target-pr-number> <pr-number> <issue-number> <finding-body-file>
@@ -153,16 +139,15 @@ scripts/publish-crosslink.sh <target-pr-number> <pr-number> <issue-number> <find
 
 - **Exit 0** — posted to the target PR.
 - **Exit 4 (duplicate)** — already cross-linked; no-op, not an error.
-- **Any other nonzero exit** — a genuine script error (e.g. bad arguments).
-  Stop and report the error rather than retrying blindly.
+- **Any other nonzero exit** — genuine script error (e.g. bad args). Stop and report, don't retry blindly.
 
 ---
 
 ## Red Flags — STOP
 
 - **Editing code, approving, merging, or changing draft/label state.** This skill only ever reads and posts comments.
-- **Posting without Phase 2's fresh-fingerprint check.** Always pass the Phase 2 fingerprint to `publish-review.sh` and let it re-verify — never hand-construct or skip the staleness check.
-- **Hand-rolling the marker text.** Always go through `publish-review.sh`/`publish-crosslink.sh` so the idempotency contract holds; a hand-written marker can't be trusted by reruns or by the external supervisor parsing it.
+- **Posting without Phase 2's fingerprint.** Always pass it to `publish-review.sh` for re-verification — never skip or hand-construct the staleness check.
+- **Hand-rolling marker text.** Always go through `publish-review.sh`/`publish-crosslink.sh` — a hand-written marker can't be trusted by reruns or the external supervisor.
 - **Leaving the detached review worktree behind.** Always `git worktree remove` it at the end of Phase 3, success or failure.
-- **Repeating ordinary correctness/style/security/test feedback** that doesn't bear on scope, description, architectural, or complexity drift — that's other reviewers' job, not this skill's.
+- **Repeating ordinary correctness/style/security/test feedback** unrelated to scope/description/architectural/complexity drift — that's other reviewers' job.
 - **Speculative cross-linking.** Only cross-link with concrete evidence, never a guess that another PR "might" be relevant.
