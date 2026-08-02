@@ -26,6 +26,11 @@ assert_eq() {
   if [ "$expected" = "$actual" ]; then ok "$desc"; else fail "$desc (expected [$expected], got [$actual])"; fi
 }
 
+assert_contains() {
+  local desc="$1" file="$2" pattern="$3"
+  if grep -qF "$pattern" "$file"; then ok "$desc"; else fail "$desc (missing [$pattern] in $file)"; fi
+}
+
 # write_gh_shim <path> — fake `gh` returning STUB_HEAD/STUB_BASE/STUB_PR_BODY/
 # STUB_PR_UPDATED/STUB_ISSUE_BODY/STUB_ISSUE_UPDATED as the relevant JSON.
 write_gh_shim() {
@@ -97,6 +102,20 @@ STUB_HEAD="deadbeef" STUB_BASE="cafef00d" STUB_PR_BODY="different pr text" STUB_
   out3="$(run_snapshot 10 20)"
 fp3="$(printf '%s' "$out3" | jq -r .fingerprint)"
 assert_eq "case3: fingerprint changes with pr body" 1 "$([ "$fp1" != "$fp3" ] && echo 1 || echo 0)"
+
+# --- Case 4: non-numeric pr-number is rejected cleanly ---
+new_fixture
+out4="$(PATH="$STUBBIN:$PATH" STUB_REPO="testowner/testrepo" "$SNAPSHOT" "abc" 20 2>"$BASE/err4.log")"
+rc4=$?
+assert_eq "case4: exits 1 on non-numeric pr-number" 1 "$rc4"
+assert_contains "case4: clear error message" "$BASE/err4.log" "invalid pr-number"
+
+# --- Case 5: non-numeric issue-number is rejected cleanly ---
+new_fixture
+out5="$(PATH="$STUBBIN:$PATH" STUB_REPO="testowner/testrepo" "$SNAPSHOT" 10 "xyz" 2>"$BASE/err5.log")"
+rc5=$?
+assert_eq "case5: exits 1 on non-numeric issue-number" 1 "$rc5"
+assert_contains "case5: clear error message" "$BASE/err5.log" "invalid issue-number"
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

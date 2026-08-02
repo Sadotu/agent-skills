@@ -27,6 +27,13 @@ expected_fingerprint="$3"
 verdict="$4"
 body_file="$5"
 
+case "$pr_number" in
+  ''|*[!0-9]*) echo "invalid pr-number: $pr_number" >&2; exit 1 ;;
+esac
+case "$issue_number" in
+  ''|*[!0-9]*) echo "invalid issue-number: $issue_number" >&2; exit 1 ;;
+esac
+
 case "$verdict" in
   PASS|BLOCKING) ;;
   *) echo "invalid verdict: $verdict (must be PASS or BLOCKING)" >&2; exit 1 ;;
@@ -55,20 +62,13 @@ base_sha="$(printf '%s' "$current" | jq -r .base)"
 issue_updated_at="$(printf '%s' "$current" | jq -r .issueUpdatedAt)"
 pr_updated_at="$(printf '%s' "$current" | jq -r .prUpdatedAt)"
 
-comments_text="$(GH pr view "$pr_number" --json comments -q '.comments[].body')"
-existing_markers="$(extract_markers "$comments_text" "$MARKER_TAG_REVIEW")"
+comments_json="$(GH pr view "$pr_number" --json comments)"
+existing_fps="$(marker_own_fingerprints "$comments_json" "$MARKER_TAG_REVIEW")"
 
-pass_count=0
+pass_count="$(printf '%s\n' "$existing_fps" | grep -c . || true)"
 already_published=0
-if [ -n "$existing_markers" ]; then
-  while IFS= read -r marker_json; do
-    [ -n "$marker_json" ] || continue
-    pass_count=$((pass_count + 1))
-    marker_fp="$(printf '%s' "$marker_json" | jq -r .fingerprint)"
-    if [ "$marker_fp" = "$current_fingerprint" ]; then
-      already_published=1
-    fi
-  done <<< "$existing_markers"
+if printf '%s\n' "$existing_fps" | grep -qxF "$current_fingerprint"; then
+  already_published=1
 fi
 
 if [ "$already_published" -eq 1 ]; then
@@ -78,21 +78,30 @@ fi
 
 pass_number=$((pass_count + 1))
 
-marker_json="$(jq -nc \
+# The marker is posted before we know the comment's own URL (the URL is
+# only known once `gh pr comment` returns it), so build the comment body
+# with a placeholder-free marker first, post, then re-emit the marker JSON
+# (stdout only, not the posted comment body) with the URL added.
+marker_json_body="$(jq -nc \
   --arg fp "$current_fingerprint" --arg head "$head_sha" --arg base "$base_sha" \
   --arg issueUpdatedAt "$issue_updated_at" --arg prUpdatedAt "$pr_updated_at" \
   --argjson issue "$issue_number" --argjson pr "$pr_number" --argjson pass "$pass_number" \
   --arg verdict "$verdict" \
   '{fingerprint: $fp, head: $head, base: $base, issueUpdatedAt: $issueUpdatedAt, prUpdatedAt: $prUpdatedAt,
     issue: $issue, pr: $pr, pass: $pass, verdict: $verdict}')"
-marker="$(marker_line "$MARKER_TAG_REVIEW" "$marker_json")"
+marker="$(marker_line "$MARKER_TAG_REVIEW" "$marker_json_body")"
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 cat "$body_file" > "$tmp"
 printf '\n\n%s\n' "$marker" >> "$tmp"
 
-GH pr comment "$pr_number" --body-file "$tmp"
+# `gh pr comment` prints the created comment's URL to stdout — capture it
+# instead of letting it leak onto our own stdout, which must stay a single
+# line of marker JSON for the caller to parse programmatically.
+comment_url="$(GH pr comment "$pr_number" --body-file "$tmp")"
+
+marker_json="$(printf '%s' "$marker_json_body" | jq -c --arg url "$comment_url" '. + {url: $url}')"
 
 echo "PUBLISHED: pass $pass_number, verdict $verdict, fingerprint $current_fingerprint" >&2
 printf '%s\n' "$marker_json"

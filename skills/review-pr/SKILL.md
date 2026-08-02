@@ -100,7 +100,7 @@ otherwise `PASS`.
 
 If concrete evidence (not speculation) implicates another open PR — e.g. it
 names another PR, or duplicates/overlaps a change also present in another
-open PR you can see — note it for cross-linking in Phase 6.
+open PR you can see — note it for cross-linking in Phase 7.
 
 ## Phase 5 — Compose the comment
 
@@ -117,14 +117,22 @@ human doesn't have to re-check them), and the overall verdict.
 scripts/publish-review.sh <pr-number> <issue-number> <fingerprint-from-phase-2> <PASS|BLOCKING> <body-file>
 ```
 
-- **Exit 0** — posted. The marker JSON (including the real pass number) is
-  printed to stdout; report the PR comment URL/pass number to the user.
+- **Exit 0** — posted. The marker JSON (including the real pass number and
+  the posted comment's URL) is printed to stdout; report the PR comment
+  URL/pass number to the user.
 - **Exit 3 (stale)** — the issue or PR changed since Phase 2's snapshot was
   captured. Do not retry with the same body — restart from Phase 2 with a
   fresh snapshot; if the change is substantive, the analysis in Phase 4 may
   need to change too.
 - **Exit 4 (duplicate)** — this exact snapshot was already reviewed; no new
   comment is needed. Report convergence, not an error.
+- **Any other nonzero exit** — a genuine script error (e.g. bad arguments).
+  Stop and report the error rather than retrying blindly.
+
+Note: on a very long-lived PR, `gh pr view --json comments` may not return
+the full comment history (GitHub API pagination), so pass numbering and
+duplicate detection are best-effort in that case — this is a documented
+limitation, not something this skill codes around.
 
 ## Phase 7 — Cross-link affected PRs
 
@@ -138,6 +146,8 @@ scripts/publish-crosslink.sh <target-pr-number> <pr-number> <issue-number> <find
 
 - **Exit 0** — posted to the target PR.
 - **Exit 4 (duplicate)** — already cross-linked; no-op, not an error.
+- **Any other nonzero exit** — a genuine script error (e.g. bad arguments).
+  Stop and report the error rather than retrying blindly.
 
 ---
 

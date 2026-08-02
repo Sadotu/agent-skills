@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared setup for skills/github-issue scripts. Sourced, not executed.
+# Shared setup for skills/review-pr scripts. Sourced, not executed.
 #
 # Re-derives what SKILL.md's top-level interactive Setup block computes —
 # a script runs as its own process and cannot inherit that block's shell
@@ -8,11 +8,10 @@
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null \
   || git remote get-url origin | sed -E 's#.*[:/]([^/]+/[^/.]+)(\.git)?$#\1#')"
 
-# Do NOT use `git rev-parse --show-toplevel` here: it returns whichever
-# worktree the caller's cwd happens to be in, which is wrong when
-# cleanup-merged.sh runs from inside the issue worktree it's about to
-# delete. `git worktree list --porcelain`'s first entry is always the
-# primary worktree, regardless of the caller's cwd.
+# `git worktree list --porcelain`'s first entry is always the primary
+# worktree, regardless of the caller's cwd — unlike `git rev-parse
+# --show-toplevel`, which returns whichever worktree the caller happens to
+# be running in.
 WORKSPACE="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
 
 if [ -x /opt/agent-devcontainer/gh-app-token.sh ]; then

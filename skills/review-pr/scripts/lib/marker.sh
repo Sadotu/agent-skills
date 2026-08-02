@@ -30,3 +30,23 @@ marker_line() {
 extract_markers() {
   printf '%s\n' "$1" | sed -nE "s/^<!-- ${2} (\{.*\}) -->\$/\1/p"
 }
+
+# marker_own_fingerprints <comments-json> <tag> — given the raw JSON object
+# from `gh ... --json comments` (i.e. {"comments":[...]}), returns one
+# fingerprint per line for every <tag> marker actually authored by the
+# reviewing identity (viewerDidAuthor) — comments from anyone else are
+# never trusted as markers, since the fingerprint they'd need to forge is
+# derivable from public PR/issue data. Skips malformed marker payloads
+# instead of crashing the caller under `set -e` (a crafted comment body
+# can't take the script down). CR-strips first so a web-UI edit that
+# introduces CRLF line endings doesn't silently break extract_markers's
+# line-anchored regex.
+marker_own_fingerprints() {
+  local comments_json="$1" tag="$2" own_bodies payload fp
+  own_bodies="$(printf '%s' "$comments_json" | jq -r '.comments[] | select(.viewerDidAuthor) | .body' | tr -d '\r')"
+  extract_markers "$own_bodies" "$tag" | while IFS= read -r payload; do
+    [ -n "$payload" ] || continue
+    fp="$(printf '%s' "$payload" | jq -r '.fingerprint // empty' 2>/dev/null)" || continue
+    [ -n "$fp" ] && printf '%s\n' "$fp"
+  done
+}

@@ -24,6 +24,21 @@ origin_pr="$2"
 origin_issue="$3"
 finding_file="$4"
 
+case "$target_pr" in
+  ''|*[!0-9]*) echo "invalid target-pr-number: $target_pr" >&2; exit 1 ;;
+esac
+case "$origin_pr" in
+  ''|*[!0-9]*) echo "invalid origin-pr-number: $origin_pr" >&2; exit 1 ;;
+esac
+case "$origin_issue" in
+  ''|*[!0-9]*) echo "invalid origin-issue-number: $origin_issue" >&2; exit 1 ;;
+esac
+
+if [ "$target_pr" = "$origin_pr" ]; then
+  echo "target PR cannot be the same as the origin PR" >&2
+  exit 1
+fi
+
 if [ ! -f "$finding_file" ]; then
   echo "finding file not found: $finding_file" >&2
   exit 1
@@ -36,25 +51,19 @@ source "$script_dir/lib/marker.sh"
 finding_body="$(cat "$finding_file")"
 fingerprint="$(compute_fingerprint "$origin_pr" "$origin_issue" "$target_pr" "$finding_body")"
 
-comments_text="$(GH pr view "$target_pr" --json comments -q '.comments[].body')"
-existing_markers="$(extract_markers "$comments_text" "$MARKER_TAG_CROSSLINK")"
+comments_json="$(GH pr view "$target_pr" --json comments)"
+existing_fps="$(marker_own_fingerprints "$comments_json" "$MARKER_TAG_CROSSLINK")"
 
-if [ -n "$existing_markers" ]; then
-  while IFS= read -r marker_json; do
-    [ -n "$marker_json" ] || continue
-    marker_fp="$(printf '%s' "$marker_json" | jq -r .fingerprint)"
-    if [ "$marker_fp" = "$fingerprint" ]; then
-      echo "DUPLICATE: finding already cross-linked to PR #$target_pr" >&2
-      exit 4
-    fi
-  done <<< "$existing_markers"
+if printf '%s\n' "$existing_fps" | grep -qxF "$fingerprint"; then
+  echo "DUPLICATE: finding already cross-linked to PR #$target_pr" >&2
+  exit 4
 fi
 
-marker_json="$(jq -nc \
+marker_json_body="$(jq -nc \
   --arg fp "$fingerprint" --argjson originPr "$origin_pr" --argjson originIssue "$origin_issue" \
   --argjson targetPr "$target_pr" \
   '{fingerprint: $fp, originPr: $originPr, originIssue: $originIssue, targetPr: $targetPr}')"
-marker="$(marker_line "$MARKER_TAG_CROSSLINK" "$marker_json")"
+marker="$(marker_line "$MARKER_TAG_CROSSLINK" "$marker_json_body")"
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
@@ -64,7 +73,12 @@ trap 'rm -f "$tmp"' EXIT
   printf '\n\n%s\n' "$marker"
 } > "$tmp"
 
-GH pr comment "$target_pr" --body-file "$tmp"
+# `gh pr comment` prints the created comment's URL to stdout — capture it
+# instead of letting it leak onto our own stdout, which must stay a single
+# line of marker JSON for the caller to parse programmatically.
+comment_url="$(GH pr comment "$target_pr" --body-file "$tmp")"
+
+marker_json="$(printf '%s' "$marker_json_body" | jq -c --arg url "$comment_url" '. + {url: $url}')"
 
 echo "PUBLISHED: cross-linked to PR #$target_pr, fingerprint $fingerprint" >&2
 printf '%s\n' "$marker_json"
