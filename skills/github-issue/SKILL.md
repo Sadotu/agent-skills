@@ -112,6 +112,8 @@ The classifier only reads evidence — it never runs, excludes, or alters a test
 
 **Prefer the simplest design that satisfies the issue; avoid speculative requirements.**
 
+Before implementation, record the expected files and approximate production-code size in the plan. Every added production behavior must map to an acceptance criterion or demonstrated regression; if the change grows beyond roughly twice the estimate, redesign around the simplest viable solution, and require explicit user approval for speculative hardening.
+
 Once the design doc and plan are written, replace the PR body placeholders. `## Summary` should tell reviewers what the PR solves and how, before the design log and diff:
 
 ```bash
@@ -138,8 +140,26 @@ excl="$(git rev-parse --git-path info/exclude)"
 grep -qxF 'docs/superpowers/' "$excl" || echo 'docs/superpowers/' >> "$excl"
 ```
 
-- Design: `docs/superpowers/specs/<YYYY-MM-DD>-<slug>-design.md`
-- Plan: `docs/superpowers/plans/<YYYY-MM-DD>-<slug>.md`
+Keep the exact relative paths used for this run:
+
+```bash
+design_path="docs/superpowers/specs/<YYYY-MM-DD>-<slug>-design.md"
+plan_path="docs/superpowers/plans/<YYYY-MM-DD>-<slug>.md"
+```
+
+- Design: `$design_path`
+- Plan: `$plan_path`
+
+After writing both files, record those two paths for Phase 7. Set `pr_number`
+to the PR selected in Phase 2:
+
+```bash
+git_common_dir="$(git -C "$WORKSPACE" rev-parse --git-common-dir)"
+case "$git_common_dir" in /*) ;; *) git_common_dir="$WORKSPACE/$git_common_dir" ;; esac
+artifact_manifest="$git_common_dir/github-issue/artifacts/pr-${pr_number}.paths"
+mkdir -p "$(dirname "$artifact_manifest")"
+printf '%s\n' "$design_path" "$plan_path" > "$artifact_manifest"
+```
 
 The plan must record the issue number and URL, the original acceptance criteria, and the PR closing reference `Closes #<number>`. Confirm `git status --porcelain` shows neither artifact before continuing.
 
@@ -173,6 +193,8 @@ Do not claim completion from prior output, expected behavior, or a passing subse
 
 **Before finalizing, ensure the full diff is the simplest solution that satisfies the issue.**
 
+Report production, test, and documentation line counts separately.
+
 ---
 
 ## Phase 6 — Finish (with stale-base guard)
@@ -205,7 +227,7 @@ Do not merge unless the user explicitly requests it.
 
 Run this phase when the user reports the PR merged or authenticated GitHub state reports `MERGED`. Never treat a merely closed PR as merged.
 
-`scripts/cleanup-merged.sh` only ever cleans up once the PR is `MERGED`, its branch is under `agent/*`, that branch has actually landed in `origin/main` — as a true merge commit, or proven via `git patch-id` equivalence for a squash merge; rebase merges stop and ask, since the PR's merge commit is only the last replayed commit and can never patch-match the whole feature — and its worktree (including untracked files) is clean; on any guard failure it stops and reports without touching anything.
+`scripts/cleanup-merged.sh` only ever cleans up once the PR is `MERGED`, its branch is under `agent/*`, that branch has actually landed in `origin/main` — as a true merge commit, or proven via `git patch-id` equivalence for a squash merge; rebase merges stop and ask, since the PR's merge commit is only the last replayed commit and can never patch-match the whole feature — and its worktree is clean. It deletes only the two manifest-recorded session artifacts after confirming they are ignored and untracked. Matching tracked documents are preserved; an unrecorded matching file stops cleanup with an actionable report.
 
 ```bash
 scripts/cleanup-merged.sh <pr-number> <issue-number>

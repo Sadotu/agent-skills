@@ -69,13 +69,82 @@ ISSUE_WORKTREE="$(git -C "$WORKSPACE" worktree list --porcelain | awk -v ref="re
 test -n "$ISSUE_WORKTREE"
 test -z "$(git -C "$ISSUE_WORKTREE" status --porcelain)"
 
-# --- All guards passed: delete session-local artifacts, remove worktree,
+# --- All guards passed: delete only the two session artifacts recorded by
+#     Phase 3. Matching tracked files and unrecorded files are preserved. ---
+git_common_dir="$(git -C "$WORKSPACE" rev-parse --git-common-dir)"
+case "$git_common_dir" in
+  /*) ;;
+  *) git_common_dir="$WORKSPACE/$git_common_dir" ;;
+esac
+artifact_manifest="$git_common_dir/github-issue/artifacts/pr-${pr_number}.paths"
+
+declare -a session_artifacts=()
+declare -A session_artifact_set=()
+if [ -f "$artifact_manifest" ] && [ ! -L "$artifact_manifest" ]; then
+  mapfile -t session_artifacts < "$artifact_manifest"
+  if [ "${#session_artifacts[@]}" -ne 2 ]; then
+    echo "Artifact manifest must contain exactly one design and one plan path" >&2
+    exit 1
+  fi
+
+  for artifact_path in "${session_artifacts[@]}"; do
+    case "$artifact_path" in
+      docs/superpowers/specs/*-design.md) artifact_parent='docs/superpowers/specs' ;;
+      docs/superpowers/plans/*.md) artifact_parent='docs/superpowers/plans' ;;
+      *) printf 'Invalid artifact manifest path: %q\n' "$artifact_path" >&2; exit 1 ;;
+    esac
+    artifact_basename="${artifact_path##*/}"
+    if [ "$artifact_path" != "$artifact_parent/$artifact_basename" ]; then
+      printf 'Invalid artifact manifest path: %q\n' "$artifact_path" >&2
+      exit 1
+    fi
+    if [ -n "${session_artifact_set["$artifact_path"]+present}" ]; then
+      printf 'Duplicate artifact manifest path: %q\n' "$artifact_path" >&2
+      exit 1
+    fi
+    session_artifact_set["$artifact_path"]=1
+
+    if [ ! -f "$ISSUE_WORKTREE/$artifact_path" ] || [ -L "$ISSUE_WORKTREE/$artifact_path" ]; then
+      printf 'Recorded artifact is missing or not a regular file: %q\n' "$artifact_path" >&2
+      exit 1
+    fi
+    if git -C "$ISSUE_WORKTREE" ls-files --error-unmatch -- "$artifact_path" >/dev/null 2>&1; then
+      printf 'Recorded artifact is tracked and will be preserved: %q\n' "$artifact_path" >&2
+      exit 1
+    fi
+    if ! git -C "$ISSUE_WORKTREE" check-ignore -q -- "$artifact_path"; then
+      printf 'Recorded artifact is not ignored: %q\n' "$artifact_path" >&2
+      exit 1
+    fi
+  done
+elif [ -e "$artifact_manifest" ] || [ -L "$artifact_manifest" ]; then
+  echo "Artifact manifest is not a regular file: $artifact_manifest" >&2
+  exit 1
+fi
+
+shopt -s nullglob
+for candidate in \
+  "$ISSUE_WORKTREE"/docs/superpowers/specs/*-design.md \
+  "$ISSUE_WORKTREE"/docs/superpowers/plans/*.md; do
+  candidate_path="${candidate#"$ISSUE_WORKTREE/"}"
+  if git -C "$ISSUE_WORKTREE" ls-files --error-unmatch -- "$candidate_path" >/dev/null 2>&1; then
+    continue
+  fi
+  if [ -z "${session_artifact_set["$candidate_path"]+present}" ]; then
+    printf 'Unrecorded cleanup candidate: %q; move/remove it manually\n' "$candidate_path" >&2
+    exit 1
+  fi
+done
+shopt -u nullglob
+
+# --- Remove validated artifacts, then continue the existing cleanup flow.
 #     delete the local and (if present) remote branch. `cd` into
 #     $WORKSPACE first — this may be running from inside $ISSUE_WORKTREE,
 #     about to disappear out from under the process's cwd. ---
 cd "$WORKSPACE"
-rm -f "$ISSUE_WORKTREE"/docs/superpowers/specs/*-design.md \
-      "$ISSUE_WORKTREE"/docs/superpowers/plans/*.md
+for artifact_path in "${session_artifacts[@]}"; do
+  rm -- "$ISSUE_WORKTREE/$artifact_path"
+done
 git worktree remove "$ISSUE_WORKTREE"
 git worktree prune
 if [ "$MERGE_MODE" = regular ]; then
@@ -102,4 +171,8 @@ test "$(git rev-parse main)" = "$(git rev-parse origin/main)"
 ISSUE_STATE="$(GH issue view "$issue_number" --json state -q .state)"
 if [ "$ISSUE_STATE" != CLOSED ]; then
   GH issue close "$issue_number"
+fi
+
+if [ -f "$artifact_manifest" ] && [ ! -L "$artifact_manifest" ]; then
+  rm -- "$artifact_manifest"
 fi

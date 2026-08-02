@@ -99,8 +99,14 @@ SHIM
 # commit ahead of origin/main and pushed to the fake origin — not yet
 # merged into origin/main.
 new_fixture() {
-  local content=0
-  if [ "$1" = "--content" ]; then content=1; shift; fi
+  local content=0 historical_docs=0
+  while [ "${1:-}" = "--content" ] || [ "${1:-}" = "--historical-docs" ]; do
+    case "$1" in
+      --content) content=1 ;;
+      --historical-docs) historical_docs=1 ;;
+    esac
+    shift
+  done
   local issue="$1" slug="$2"
   BASE="$(mktemp -d)"
   TMP_DIRS+=("$BASE")
@@ -125,6 +131,13 @@ new_fixture() {
   git -C "$CLONE" config core.hooksPath "$BASE/no-hooks"
   git -C "$CLONE" remote add origin "$ORIGIN"
   git -C "$CLONE" commit -q --allow-empty -m "initial commit"
+  if [ "$historical_docs" -eq 1 ]; then
+    mkdir -p "$CLONE/docs/superpowers/specs" "$CLONE/docs/superpowers/plans"
+    echo "historical design" > "$CLONE/docs/superpowers/specs/2025-01-01-historical-design.md"
+    echo "historical plan" > "$CLONE/docs/superpowers/plans/2025-01-01-historical.md"
+    git -C "$CLONE" add docs
+    git -C "$CLONE" commit -q -m "preserve historical docs"
+  fi
   git -C "$CLONE" push -q -u origin main
 
   git -C "$CLONE" worktree add -q -b "$BRANCH" "$WT" origin/main
@@ -182,6 +195,18 @@ run_cleanup() {
     STUB_REPO="testowner/testrepo" \
     "$CLEANUP" "$pr" "$issue"
   )
+}
+
+record_artifacts() {
+  local pr="$1" manifest
+  shift
+  manifest="$(git -C "$WT" rev-parse --git-common-dir)/github-issue/artifacts/pr-${pr}.paths"
+  case "$manifest" in
+    /*) ;;
+    *) manifest="$WT/$manifest" ;;
+  esac
+  mkdir -p "$(dirname "$manifest")"
+  printf '%s\n' "$@" > "$manifest"
 }
 
 # --- Case 1: PR state != MERGED -> refuse, no deletion ---
@@ -391,6 +416,73 @@ test_case10_whitespace_only_squash_diff() {
     bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
 }
 
+# --- Case 11: tracked history and recorded session artifacts can coexist. ---
+test_case11_preserves_tracked_documents() {
+  new_fixture --historical-docs 21 mixed-docs
+  mkdir -p "$WT/docs/superpowers/specs" "$WT/docs/superpowers/plans"
+  printf 'docs/superpowers/\n' >> "$(git -C "$WT" rev-parse --git-path info/exclude)"
+  echo "session design" > "$WT/docs/superpowers/specs/2026-08-02-mixed-docs-design.md"
+  echo "session plan" > "$WT/docs/superpowers/plans/2026-08-02-mixed-docs.md"
+  record_artifacts 21 \
+    docs/superpowers/specs/2026-08-02-mixed-docs-design.md \
+    docs/superpowers/plans/2026-08-02-mixed-docs.md
+  local design_blob plan_blob
+  design_blob="$(git -C "$WT" rev-parse HEAD:docs/superpowers/specs/2025-01-01-historical-design.md)"
+  plan_blob="$(git -C "$WT" rev-parse HEAD:docs/superpowers/plans/2025-01-01-historical.md)"
+  merge_branch_into_origin_main
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 21 21 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case11: cleanup succeeds" 0 "$rc"
+  assert_eq "case11: historical design content survives" "historical design" \
+    "$(git -C "$CLONE" show main:docs/superpowers/specs/2025-01-01-historical-design.md)"
+  assert_eq "case11: historical plan content survives" "historical plan" \
+    "$(git -C "$CLONE" show main:docs/superpowers/plans/2025-01-01-historical.md)"
+  assert_eq "case11: historical design blob is unchanged" "$design_blob" \
+    "$(git -C "$CLONE" rev-parse main:docs/superpowers/specs/2025-01-01-historical-design.md)"
+  assert_eq "case11: historical plan blob is unchanged" "$plan_blob" \
+    "$(git -C "$CLONE" rev-parse main:docs/superpowers/plans/2025-01-01-historical.md)"
+  assert_true "case11: worktree removed" [ ! -e "$WT" ]
+  assert_false "case11: local branch deleted" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_false "case11: remote branch deleted" \
+    bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_true "case11: local main matches origin/main" \
+    bash -c "[ \"\$(git -C '$CLONE' rev-parse main)\" = \"\$(git -C '$CLONE' rev-parse origin/main)\" ]"
+}
+
+# --- Case 12: an unrecorded matching file is ambiguous and preserved. ---
+test_case12_preserves_unrecorded_candidate() {
+  new_fixture 22 ambiguous-doc
+  mkdir -p "$WT/docs/superpowers/specs" "$WT/docs/superpowers/plans"
+  printf 'docs/superpowers/\n' >> "$(git -C "$WT" rev-parse --git-path info/exclude)"
+  echo "session design" > "$WT/docs/superpowers/specs/2026-08-02-ambiguous-doc-design.md"
+  echo "session plan" > "$WT/docs/superpowers/plans/2026-08-02-ambiguous-doc.md"
+  echo "keep me" > "$WT/docs/superpowers/specs/unrecorded-design.md"
+  record_artifacts 22 \
+    docs/superpowers/specs/2026-08-02-ambiguous-doc-design.md \
+    docs/superpowers/plans/2026-08-02-ambiguous-doc.md
+  merge_branch_into_origin_main
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" \
+    run_cleanup "$CLONE" 22 22 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF
+
+  [ "$rc" -ne 0 ] && ok "case12: cleanup refuses unrecorded candidate" \
+    || fail "case12: cleanup refuses unrecorded candidate"
+  assert_true "case12: output identifies candidate" \
+    grep -q 'unrecorded-design.md' "$BASE/out.log"
+  assert_eq "case12: candidate content is unchanged" "keep me" \
+    "$(cat "$WT/docs/superpowers/specs/unrecorded-design.md")"
+  assert_true "case12: worktree preserved" [ -d "$WT" ]
+  assert_true "case12: local branch preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
 test_case1_not_merged
 test_case2_non_agent_branch
 test_case3_not_ancestor
@@ -401,6 +493,8 @@ test_case7_clean_squash
 test_case8_squash_conflict_resolution
 test_case9_rebase_merge
 test_case10_whitespace_only_squash_diff
+test_case11_preserves_tracked_documents
+test_case12_preserves_unrecorded_candidate
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
