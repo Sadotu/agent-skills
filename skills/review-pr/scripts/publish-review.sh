@@ -78,7 +78,7 @@ fi
 
 pass_number=$((pass_count + 1))
 
-marker_json="$(jq -n \
+marker_json="$(jq -nc \
   --arg fp "$current_fingerprint" --arg head "$head_sha" --arg base "$base_sha" \
   --arg issueUpdatedAt "$issue_updated_at" --arg prUpdatedAt "$pr_updated_at" \
   --argjson issue "$issue_number" --argjson pr "$pr_number" --argjson pass "$pass_number" \

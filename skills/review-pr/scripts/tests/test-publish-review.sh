@@ -160,5 +160,31 @@ out4="$(run_publish 5 6 "$fp4b" BLOCKING)"
 assert_eq "case4: pass number increments to 2" 2 "$(printf '%s' "$out4" | jq -r .pass)"
 assert_eq "case4: verdict BLOCKING" "BLOCKING" "$(printf '%s' "$out4" | jq -r .verdict)"
 
+# --- Case 5: round-trip — a marker this script actually posted is later recognized as a duplicate ---
+new_fixture
+common_stubs
+fp5="$(PATH="$STUBBIN:$PATH" STUB_REPO="testowner/testrepo" STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" \
+  STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" STUB_ISSUE_BODY="$STUB_ISSUE_BODY" \
+  STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" "$SCRIPT_DIR/../snapshot.sh" 5 6 | jq -r .fingerprint)"
+# First invocation: publish a marker
+out5a="$(run_publish 5 6 "$fp5" PASS 2>/dev/null)"
+rc5a=$?
+assert_eq "case5: first invocation exits 0" 0 "$rc5a"
+# Capture the actual posted body (includes review text + marker)
+posted_body="$(cat "$POSTED_BODY_FILE")"
+assert_contains "case5: posted body contains marker" "$POSTED_BODY_FILE" "<!-- review-pr:v1 {"
+# Extract just the marker line(s) and use as comments for second invocation
+# The marker should be the line starting with "<!-- review-pr:v1"
+marker_line="$(grep '<!-- review-pr:v1' "$POSTED_BODY_FILE" || true)"
+[ -n "$marker_line" ] || { fail "case5: could not extract marker line from posted body"; marker_line=""; }
+# Write the marker as if it came from a previous comment
+printf '%s\n' "$marker_line" > "$COMMENTS_FILE"
+# Second invocation: same PR, issue, fingerprint — should detect duplicate
+out5b="$(run_publish 5 6 "$fp5" PASS 2>"$BASE/err5.log")"
+rc5b=$?
+assert_eq "case5: second invocation exits 4 on duplicate" 4 "$rc5b"
+assert_eq "case5: nothing posted on second invocation" "" "$out5b"
+assert_contains "case5: DUPLICATE reported on stderr" "$BASE/err5.log" "DUPLICATE"
+
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
