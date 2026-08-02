@@ -112,13 +112,7 @@ The classifier only reads evidence — it never runs, excludes, or alters a test
 
 **Prefer the simplest design that satisfies the issue; avoid speculative requirements.**
 
-### Complexity budget
-
-Before implementation, record the expected files and approximate production-code size in the plan. If the actual change grows beyond roughly twice that estimate, stop and redesign around a smaller solution before continuing.
-
-Every added production behavior must map to an acceptance criterion or a demonstrated regression. Concurrency hardening, transactional recovery, generalized frameworks, and policy for unrelated edge cases require explicit issue scope or user approval; do not add them merely because they could make the implementation more comprehensive.
-
-Treat line count as a diagnostic, not a target: readable tests may be longer than the fix. Optimize for the fewest new production behaviors and abstractions needed to satisfy the issue.
+Before implementation, record the expected files and approximate production-code size in the plan. Every added production behavior must map to an acceptance criterion or demonstrated regression; if the change grows beyond roughly twice the estimate, redesign around the simplest viable solution, and require explicit user approval for speculative hardening.
 
 Once the design doc and plan are written, replace the PR body placeholders. `## Summary` should tell reviewers what the PR solves and how, before the design log and diff:
 
@@ -199,7 +193,7 @@ Do not claim completion from prior output, expected behavior, or a passing subse
 
 **Before finalizing, ensure the full diff is the simplest solution that satisfies the issue.**
 
-Report production, test, and documentation line counts separately. For each added production behavior, identify the acceptance criterion or regression that requires it. Compare the final diff with the simplest viable alternative; if the chosen implementation is materially larger, simplify it or record the user's approval for the added scope.
+Report production, test, and documentation line counts separately.
 
 ---
 
