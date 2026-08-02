@@ -106,91 +106,13 @@ The classifier only reads evidence — it never runs, excludes, or alters a test
 
 ## Phase 3 — Design and Plan (inside issue worktree)
 
-This phase produces two **session-local working files** inside `<worktree-path>` — the design records the decisions and the plan drives Phase 4. They must **not** land in the PR diff, so Git-exclude them before writing (Phase 7 removes them through its recoverable cleanup):
-
-```bash
-excl="$(git rev-parse --git-path info/exclude)"
-grep -qxF 'docs/superpowers/' "$excl" || echo 'docs/superpowers/' >> "$excl"
-```
-
-Set `issue_number`, `slug`, and `pr_number` from the values already resolved by this workflow. Validate them, derive the UTC date, and define the exact repository-relative artifact paths once; use these variables when writing the files:
-
-```bash
-case "${issue_number:-}" in ''|*[!0-9]*) echo "invalid issue number" >&2; exit 1 ;; esac
-case "${pr_number:-}" in ''|*[!0-9]*) echo "invalid PR number" >&2; exit 1 ;; esac
-if ! [[ "${slug:-}" =~ ^[a-z0-9]+(-[a-z0-9]+){2,4}$ ]]; then
-  echo "invalid slug: expected 3-5 lowercase kebab-case words" >&2
-  exit 1
-fi
-artifact_date="$(date -u +%F)"
-design_path="docs/superpowers/specs/${artifact_date}-${slug}-design.md"
-plan_path="docs/superpowers/plans/${artifact_date}-${slug}.md"
-```
-
-- Design: `$design_path`
-- Plan: `$plan_path`
-
-**REQUIRED SUB-SKILL:** Use `superpowers:brainstorming`, seeded with the issue description and your codebase findings, for its structure only (explore context → clarifying questions → propose approaches → present design → write spec → self-review). Write and self-review the completed design specifically at `$design_path`.
+**REQUIRED SUB-SKILL:** Use `superpowers:brainstorming`, seeded with the issue description and your codebase findings, for its structure only (explore context → clarifying questions → propose approaches → present design → write spec → self-review).
 
 **Override for this workflow — do not pause at any of brainstorming's gates.** That skill normally stops and waits for the user at each step: clarifying questions, the approach choice, per-section design approval, the spec review gate. Here none of that waits. For every question you would have asked, generate it as usual, answer it yourself (pick the recommended or best option), and continue immediately. Record each one as you go: the question, the options considered, the answer chosen, and why.
 
 **Prefer the simplest design that satisfies the issue; avoid speculative requirements.**
 
-Then use `superpowers:writing-plans` and write the plan specifically at `$plan_path`. The plan must record the issue number and URL, the original acceptance criteria, and the PR closing reference `Closes #<number>`.
-
-Confirm both artifacts are ignored and absent from `git status --porcelain` before publishing their provenance:
-
-```bash
-for artifact_path in "$design_path" "$plan_path"; do
-  git check-ignore -q -- "$artifact_path" || exit 1
-done
-test -z "$(git status --porcelain -- "$design_path" "$plan_path")" || exit 1
-```
-
-Record those two exact paths as NUL-delimited session provenance in shared Git metadata. Resolve a relative `--git-common-dir` against `$WORKSPACE`, then publish the manifest atomically without replacing existing provenance:
-
-```bash
-git_common_dir="$(git -C "$WORKSPACE" rev-parse --git-common-dir)"
-case "$git_common_dir" in
-  /*) ;;
-  *) git_common_dir="$WORKSPACE/$git_common_dir" ;;
-esac
-git_common_dir="$(cd "$git_common_dir" && pwd -P)"
-artifact_dir="$git_common_dir/github-issue/artifacts"
-artifact_manifest="$artifact_dir/pr-${pr_number}.paths"
-mkdir -p -- "$artifact_dir" || exit 1
-if ! (
-  artifact_tmp="$(mktemp "$artifact_dir/.pr-${pr_number}.paths.XXXXXX")" || exit 1
-  cleanup_artifact_tmp() { [ -z "$artifact_tmp" ] || rm -f -- "$artifact_tmp"; }
-  trap cleanup_artifact_tmp EXIT
-  printf '%s\0' "$design_path" "$plan_path" > "$artifact_tmp" || exit 1
-
-  if [ -e "$artifact_manifest" ] || [ -L "$artifact_manifest" ]; then
-    if [ ! -f "$artifact_manifest" ] || [ -L "$artifact_manifest" ] \
-      || ! cmp -s -- "$artifact_tmp" "$artifact_manifest"; then
-      echo "refusing to replace different or unsafe artifact provenance: $artifact_manifest" >&2
-      exit 1
-    fi
-  elif ! ln -- "$artifact_tmp" "$artifact_manifest"; then
-    if [ ! -f "$artifact_manifest" ] || [ -L "$artifact_manifest" ] \
-      || ! cmp -s -- "$artifact_tmp" "$artifact_manifest"; then
-      echo "artifact provenance changed during publication: $artifact_manifest" >&2
-      exit 1
-    fi
-  fi
-
-  rm -- "$artifact_tmp" || exit 1
-  artifact_tmp=''
-  trap - EXIT
-); then
-  echo "failed to publish artifact provenance: $artifact_manifest" >&2
-  exit 1
-fi
-```
-
-Identical reruns are safe; different or unsafe existing provenance stops the workflow. The manifest contains exactly this correlated pair: one design and one plan with the same generated date and slug. This PR-specific manifest is the stronger session provenance Phase 7 requires. An artifact being ignored, untracked, or pathname-matched does not by itself prove that this session owns it.
-
-Only after the completed design and plan have been recorded in the manifest, replace the PR body placeholders. `## Summary` should tell reviewers what the PR solves and how, before the design log and diff:
+Once the design doc and plan are written, replace the PR body placeholders. `## Summary` should tell reviewers what the PR solves and how, before the design log and diff:
 
 ```bash
 GH pr edit <pr-number> --body "$(cat <<'EOF'
@@ -207,7 +129,37 @@ EOF
 )"
 ```
 
-Derive **Problem** from the issue and **Approach** from the completed design; both must be specific, not boilerplate. **Problem** states observable application/user-facing pain — what someone hits — without naming the fix; no implementation nouns. **Approach** states the behavior-level solution in minimal implementation jargon and names deliberate non-goals (what this PR intentionally does not do). Phase 6 updates **Approach** if the implementation differs. The PR body is the asynchronous record of the design conversation.
+Derive **Problem** from the issue and **Approach** from the chosen design; both must be specific, not boilerplate. **Problem** states observable application/user-facing pain — what someone hits — without naming the fix; no implementation nouns. **Approach** states the behavior-level solution in minimal implementation jargon and names deliberate non-goals (what this PR intentionally does not do). Phase 6 updates **Approach** if the implementation differs. The PR body is the asynchronous record of the design conversation. Then use `superpowers:writing-plans` to produce the plan.
+
+Write two artifacts inside `<worktree-path>` as **session-local working files** — the plan drives Phase 4, the design records the decisions. They must **not** land in the PR diff, so Git-exclude them before writing (Phase 7 deletes them with the worktree):
+
+```bash
+excl="$(git rev-parse --git-path info/exclude)"
+grep -qxF 'docs/superpowers/' "$excl" || echo 'docs/superpowers/' >> "$excl"
+```
+
+Keep the exact relative paths used for this run:
+
+```bash
+design_path="docs/superpowers/specs/<YYYY-MM-DD>-<slug>-design.md"
+plan_path="docs/superpowers/plans/<YYYY-MM-DD>-<slug>.md"
+```
+
+- Design: `$design_path`
+- Plan: `$plan_path`
+
+After writing both files, record those two paths for Phase 7. Set `pr_number`
+to the PR selected in Phase 2:
+
+```bash
+git_common_dir="$(git -C "$WORKSPACE" rev-parse --git-common-dir)"
+case "$git_common_dir" in /*) ;; *) git_common_dir="$WORKSPACE/$git_common_dir" ;; esac
+artifact_manifest="$git_common_dir/github-issue/artifacts/pr-${pr_number}.paths"
+mkdir -p "$(dirname "$artifact_manifest")"
+printf '%s\n' "$design_path" "$plan_path" > "$artifact_manifest"
+```
+
+The plan must record the issue number and URL, the original acceptance criteria, and the PR closing reference `Closes #<number>`. Confirm `git status --porcelain` shows neither artifact before continuing.
 
 ---
 
@@ -271,19 +223,13 @@ Do not merge unless the user explicitly requests it.
 
 Run this phase when the user reports the PR merged or authenticated GitHub state reports `MERGED`. Never treat a merely closed PR as merged.
 
-`scripts/cleanup-merged.sh` runs all existing merged-PR, `agent/*` branch, landed-work, and clean-worktree guards before artifact handling. Landed work must be either a true merge or proven via `git patch-id` equivalence for a squash merge; rebase merges stop and ask because the PR's merge commit is only the last replayed commit and cannot patch-match the whole feature.
-
-With a manifest, cleanup requires exactly the correlated Phase 3 pair: one design and one plan with the same date and slug. Both must still be ignored, untracked regular files at their exact recorded paths. Any other ignored or untracked file anywhere in the worktree is ambiguous and stops cleanup; ignored status or a familiar pathname is never ownership proof. A missing manifest is allowed only when the worktree has no ignored or untracked files anywhere. Tracked historical documents remain preserved during validated cleanup.
-
-Valid artifacts are moved into a pinned, PR-specific quarantine under shared Git metadata before normal nonforced worktree removal. Cleanup refuses symlinked quarantine metadata components and anchors the real quarantine directories and file identities while operating. After quarantining, it rechecks ignored and untracked files immediately before worktree removal; late ambiguity or discovery failure rolls the artifacts back and preserves the worktree. If worktree removal fails, it likewise restores quarantined artifacts byte-for-byte when the original locations remain safe; ambiguous restoration retains the data and reports its actionable recovery path.
-
-If branch deletion, main synchronization, or GitHub cleanup fails after worktree removal, the manifest and quarantine remain available for recovery. Final success first preflights the complete quarantine contents and every recorded file identity before deleting any quarantine entry; a mismatch retains the manifest and quarantine for recovery. Only full success disposes the exact quarantined files and directory and removes the manifest. These safety guarantees assume no external process mutates the worktree or quarantine after the final preflights: a shell workflow cannot make such concurrent mutation transactional, while discrepancies it detects still fail closed.
+`scripts/cleanup-merged.sh` only ever cleans up once the PR is `MERGED`, its branch is under `agent/*`, that branch has actually landed in `origin/main` — as a true merge commit, or proven via `git patch-id` equivalence for a squash merge; rebase merges stop and ask, since the PR's merge commit is only the last replayed commit and can never patch-match the whole feature — and its worktree is clean. It deletes only the two manifest-recorded session artifacts after confirming they are ignored and untracked. Matching tracked documents are preserved; an unrecorded matching file stops cleanup with an actionable report.
 
 ```bash
 scripts/cleanup-merged.sh <pr-number> <issue-number>
 ```
 
-After artifact validation, cleanup uses normal nonforced worktree removal. Never use forced worktree removal, reset, clean, or force-push during post-merge cleanup. `git branch -D` only via the proven-squash path in `cleanup-merged.sh` (PR `MERGED` + `agent/*` + merge commit in `origin/main` + patch-id equivalence + clean worktree); never by hand. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
+Never use forced worktree removal, reset, clean, or force-push during post-merge cleanup. `git branch -D` only via the proven-squash path in `cleanup-merged.sh` (PR `MERGED` + `agent/*` + merge commit in `origin/main` + patch-id equivalence + clean worktree); never by hand. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
 
 ---
 
