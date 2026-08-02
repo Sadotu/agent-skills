@@ -16,3 +16,7 @@ explicit `path` in `agents.toml`.
 
 - `github-issue` — takes an issue from selection to a verified, ready-for-review
   PR using an isolated worktree and subagents. Works in any repository.
+- `review-pr` — one read-only, idempotent application-drift review pass
+  against a linked issue and PR: scope/description drift, overengineering,
+  convention drift, integration gaps, orphaned compatibility code. Never
+  edits code or changes draft/label state.
