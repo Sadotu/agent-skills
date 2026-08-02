@@ -112,6 +112,14 @@ The classifier only reads evidence — it never runs, excludes, or alters a test
 
 **Prefer the simplest design that satisfies the issue; avoid speculative requirements.**
 
+### Complexity budget
+
+Before implementation, record the expected files and approximate production-code size in the plan. If the actual change grows beyond roughly twice that estimate, stop and redesign around a smaller solution before continuing.
+
+Every added production behavior must map to an acceptance criterion or a demonstrated regression. Concurrency hardening, transactional recovery, generalized frameworks, and policy for unrelated edge cases require explicit issue scope or user approval; do not add them merely because they could make the implementation more comprehensive.
+
+Treat line count as a diagnostic, not a target: readable tests may be longer than the fix. Optimize for the fewest new production behaviors and abstractions needed to satisfy the issue.
+
 Once the design doc and plan are written, replace the PR body placeholders. `## Summary` should tell reviewers what the PR solves and how, before the design log and diff:
 
 ```bash
@@ -190,6 +198,8 @@ Do not claim completion from prior output, expected behavior, or a passing subse
 **Re-check every accepted baseline failure.** For each `Accepted baseline failure` recorded in the PR, re-run its recorded command and re-invoke `scripts/baseline-triage.sh` — set `--branch-worsened yes` if the output, failing assertions, or exit/timing behavior changed from the recorded baseline. If any accepted failure now regresses, or the actual implementation expanded the change surface so `--overlaps-surface` is now `yes`, stop, do **not** mark the PR ready, and report. Otherwise preserve the confirmed-unchanged evidence in the PR verification summary. Never convert, suppress, or exclude a failure to finish.
 
 **Before finalizing, ensure the full diff is the simplest solution that satisfies the issue.**
+
+Report production, test, and documentation line counts separately. For each added production behavior, identify the acceptance criterion or regression that requires it. Compare the final diff with the simplest viable alternative; if the chosen implementation is materially larger, simplify it or record the user's approval for the added scope.
 
 ---
 
