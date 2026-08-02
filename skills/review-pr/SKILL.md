@@ -134,6 +134,13 @@ the full comment history (GitHub API pagination), so pass numbering and
 duplicate detection are best-effort in that case — this is a documented
 limitation, not something this skill codes around.
 
+Note: markers are only recognized when authored by the same `gh`-authenticated
+identity that is running this review — this is deliberate (it's what stops a
+PR commenter from forging a marker to suppress or fake a review), but it also
+means a devcontainer (GitHub App) pass and a local `gh auth login` (human)
+pass never see each other's markers on the same PR; pass numbering resets and
+a prior pass is not recognized as a duplicate across a change of identity.
+
 ## Phase 7 — Cross-link affected PRs
 
 For each finding from Phase 4 that names or is concretely evidenced against

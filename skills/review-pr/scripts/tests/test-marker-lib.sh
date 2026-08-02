@@ -68,5 +68,70 @@ assert_eq "extract_markers with wrong tag returns empty" "" "$extracted_wrong_ta
 extracted_none="$(extract_markers "plain comment, no marker here" "review-pr:v1")"
 assert_eq "extract_markers with no marker returns empty" "" "$extracted_none"
 
+# --- marker_own_fingerprints: only viewerDidAuthor:true markers count ---
+comments_mixed="$(jq -n '{comments: [
+  {viewerDidAuthor: true,  body: "<!-- review-pr:v1 {\"fingerprint\":\"own-fp\",\"pass\":1} -->"},
+  {viewerDidAuthor: false, body: "<!-- review-pr:v1 {\"fingerprint\":\"forged-fp\",\"pass\":99} -->"}
+]}')"
+own_fps="$(marker_own_fingerprints "$comments_mixed" "review-pr:v1")"
+assert_eq "marker_own_fingerprints excludes non-viewerDidAuthor markers" "own-fp" "$own_fps"
+
+# --- marker_own_fingerprints: no own markers returns empty, doesn't crash ---
+comments_none_own="$(jq -n '{comments: [
+  {viewerDidAuthor: false, body: "<!-- review-pr:v1 {\"fingerprint\":\"forged-fp\"} -->"}
+]}')"
+none_own="$(marker_own_fingerprints "$comments_none_own" "review-pr:v1")"
+rc_none_own=$?
+assert_eq "marker_own_fingerprints returns empty when no own markers" "" "$none_own"
+assert_eq "marker_own_fingerprints exits 0 when no own markers" 0 "$rc_none_own"
+
+# --- marker_own_fingerprints: own marker with valid JSON but no fingerprint
+# key is skipped, not fatal, and does not stop other valid markers from
+# being returned (regression: an earlier version's while-loop last
+# statement was `[ -n "$fp" ] && printf ...`, whose false branch made the
+# loop's own exit status 1 on the final skipped item, which killed any
+# `set -e` caller via `existing_fps="$(marker_own_fingerprints ...)"`) ---
+comments_no_fp_field="$(jq -n '{comments: [
+  {viewerDidAuthor: true, body: "<!-- review-pr:v1 {\"note\":\"hi\"} -->"}
+]}')"
+no_fp_out="$(marker_own_fingerprints "$comments_no_fp_field" "review-pr:v1")"
+rc_no_fp=$?
+assert_eq "marker_own_fingerprints skips own marker missing fingerprint key" "" "$no_fp_out"
+assert_eq "marker_own_fingerprints exits 0 (not fatal) when fingerprint key missing" 0 "$rc_no_fp"
+
+comments_no_fp_then_valid="$(jq -n '{comments: [
+  {viewerDidAuthor: true, body: "<!-- review-pr:v1 {\"note\":\"hi\"} -->"},
+  {viewerDidAuthor: true, body: "<!-- review-pr:v1 {\"fingerprint\":\"real-fp\"} -->"}
+]}')"
+mixed_out="$(marker_own_fingerprints "$comments_no_fp_then_valid" "review-pr:v1")"
+assert_eq "marker_own_fingerprints returns later valid fingerprint after skipping one missing it" "real-fp" "$mixed_out"
+
+# --- marker_own_fingerprints: malformed JSON payload (two marker-shaped
+# substrings on one line) is skipped, not fatal ---
+comments_malformed="$(jq -n '{comments: [
+  {viewerDidAuthor: true, body: "<!-- review-pr:v1 {\"a\":1} --> x <!-- review-pr:v1 {\"b\":2} -->"}
+]}')"
+malformed_out="$(marker_own_fingerprints "$comments_malformed" "review-pr:v1")"
+rc_malformed=$?
+assert_eq "marker_own_fingerprints skips malformed marker payload" "" "$malformed_out"
+assert_eq "marker_own_fingerprints exits 0 (not fatal) on malformed payload" 0 "$rc_malformed"
+
+# --- marker_own_fingerprints: CRLF-terminated own marker still matches ---
+comments_crlf="$(jq -n '{comments: [
+  {viewerDidAuthor: true, body: "line one\r\n<!-- review-pr:v1 {\"fingerprint\":\"crlf-fp\"} -->\r\nline two"}
+]}')"
+crlf_out="$(marker_own_fingerprints "$comments_crlf" "review-pr:v1")"
+assert_eq "marker_own_fingerprints strips CRLF before matching" "crlf-fp" "$crlf_out"
+
+# --- marker_own_fingerprints: multiple own markers, all returned in order ---
+comments_multi_own="$(jq -n '{comments: [
+  {viewerDidAuthor: true, body: "<!-- review-pr:v1 {\"fingerprint\":\"fp-a\"} -->"},
+  {viewerDidAuthor: true, body: "<!-- review-pr:v1 {\"fingerprint\":\"fp-b\"} -->"}
+]}')"
+multi_out="$(marker_own_fingerprints "$comments_multi_own" "review-pr:v1")"
+expected_multi_own='fp-a
+fp-b'
+assert_eq "marker_own_fingerprints returns all own markers in order" "$expected_multi_own" "$multi_out"
+
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

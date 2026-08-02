@@ -43,10 +43,12 @@ extract_markers() {
 # line-anchored regex.
 marker_own_fingerprints() {
   local comments_json="$1" tag="$2" own_bodies payload fp
-  own_bodies="$(printf '%s' "$comments_json" | jq -r '.comments[] | select(.viewerDidAuthor) | .body' | tr -d '\r')"
+  own_bodies="$(printf '%s' "$comments_json" | jq -r '.comments[] | select(.viewerDidAuthor) | .body')" || return 1
+  own_bodies="$(printf '%s' "$own_bodies" | tr -d '\r')"
   extract_markers "$own_bodies" "$tag" | while IFS= read -r payload; do
     [ -n "$payload" ] || continue
     fp="$(printf '%s' "$payload" | jq -r '.fingerprint // empty' 2>/dev/null)" || continue
-    [ -n "$fp" ] && printf '%s\n' "$fp"
+    [ -n "$fp" ] || continue
+    printf '%s\n' "$fp"
   done
 }
