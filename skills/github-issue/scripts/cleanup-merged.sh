@@ -69,13 +69,167 @@ ISSUE_WORKTREE="$(git -C "$WORKSPACE" worktree list --porcelain | awk -v ref="re
 test -n "$ISSUE_WORKTREE"
 test -z "$(git -C "$ISSUE_WORKTREE" status --porcelain)"
 
-# --- All guards passed: delete session-local artifacts, remove worktree,
-#     delete the local and (if present) remote branch. `cd` into
+# --- All guards passed: validate exact ownership of session-local artifacts
+#     before deleting anything. The PR-specific manifest is NUL-delimited so
+#     repository paths are never split on whitespace or newlines. ---
+case "$pr_number" in
+  ''|*[!0-9]*)
+    echo "Invalid PR number for artifact manifest: $pr_number" >&2
+    exit 1
+    ;;
+esac
+
+git_common_dir="$(git -C "$WORKSPACE" rev-parse --git-common-dir)"
+case "$git_common_dir" in
+  /*) ;;
+  *) git_common_dir="$WORKSPACE/$git_common_dir" ;;
+esac
+git_common_dir="$(cd "$git_common_dir" && pwd -P)"
+artifact_manifest="$git_common_dir/github-issue/artifacts/pr-${pr_number}.paths"
+
+declare -a recorded_artifacts=()
+declare -A recorded_artifact_set=()
+declare -A artifact_parent_identity=()
+artifact_manifest_present=0
+if [ -e "$artifact_manifest" ] || [ -L "$artifact_manifest" ]; then
+  artifact_manifest_present=1
+  if [ ! -f "$artifact_manifest" ] || [ -L "$artifact_manifest" ]; then
+    echo "Artifact manifest is not a regular file: $artifact_manifest" >&2
+    exit 1
+  fi
+
+  while :; do
+    artifact_path=''
+    if IFS= read -r -d '' artifact_path; then
+      case "$artifact_path" in
+        docs/superpowers/specs/*-design.md)
+          artifact_basename="${artifact_path#docs/superpowers/specs/}"
+          ;;
+        docs/superpowers/plans/*.md)
+          artifact_basename="${artifact_path#docs/superpowers/plans/}"
+          ;;
+        *)
+          printf 'Artifact manifest contains an invalid path: %q\n' "$artifact_path" >&2
+          exit 1
+          ;;
+      esac
+      case "$artifact_basename" in
+        ''|.|..|*/*)
+          printf 'Artifact manifest contains an invalid path: %q\n' "$artifact_path" >&2
+          exit 1
+          ;;
+      esac
+      if [ -n "${recorded_artifact_set["$artifact_path"]+present}" ]; then
+        printf 'Artifact manifest contains a duplicate path: %q\n' "$artifact_path" >&2
+        exit 1
+      fi
+      recorded_artifact_set["$artifact_path"]=1
+      recorded_artifacts+=("$artifact_path")
+    else
+      if [ -n "$artifact_path" ]; then
+        echo "Artifact manifest has trailing data that is not NUL-terminated: $artifact_manifest" >&2
+        exit 1
+      fi
+      break
+    fi
+  done < "$artifact_manifest"
+fi
+
+for artifact_path in "${recorded_artifacts[@]}"; do
+  artifact_parent="${artifact_path%/*}"
+  if [ ! -d "$ISSUE_WORKTREE/$artifact_parent" ] || [ -L "$ISSUE_WORKTREE/$artifact_parent" ]; then
+    printf 'Recorded artifact parent is not a real directory: %q\n' "$artifact_parent" >&2
+    exit 1
+  fi
+  if [ -z "${artifact_parent_identity["$artifact_parent"]+present}" ]; then
+    if ! parent_identity="$(stat -Lc '%d:%i' -- "$ISSUE_WORKTREE/$artifact_parent")"; then
+      printf 'Cannot identify recorded artifact parent: %q\n' "$artifact_parent" >&2
+      exit 1
+    fi
+    artifact_parent_identity["$artifact_parent"]="$parent_identity"
+  fi
+  if [ ! -f "$ISSUE_WORKTREE/$artifact_path" ] || [ -L "$ISSUE_WORKTREE/$artifact_path" ]; then
+    printf 'Recorded artifact is missing or is not a regular file: %q\n' "$artifact_path" >&2
+    exit 1
+  fi
+  if git -C "$ISSUE_WORKTREE" ls-files --error-unmatch -- "$artifact_path" >/dev/null 2>&1; then
+    printf 'Recorded artifact is tracked and will not be deleted: %q\n' "$artifact_path" >&2
+    exit 1
+  fi
+  if ! git -C "$ISSUE_WORKTREE" check-ignore -q -- "$artifact_path"; then
+    printf 'Recorded artifact is not ignored: %q\n' "$artifact_path" >&2
+    exit 1
+  fi
+done
+
+artifact_discovery_file="$(mktemp "${TMPDIR:-/tmp}/cleanup-merged-artifacts.XXXXXX")"
+cleanup_artifact_discovery_file() {
+  if [ -e "$artifact_discovery_file" ]; then
+    rm -- "$artifact_discovery_file"
+  fi
+}
+trap cleanup_artifact_discovery_file EXIT
+
+for artifact_discovery in \
+  'docs/superpowers/specs:*-design.md' \
+  'docs/superpowers/plans:*.md'; do
+  artifact_dir="${artifact_discovery%%:*}"
+  artifact_pattern="${artifact_discovery#*:}"
+  [ -d "$ISSUE_WORKTREE/$artifact_dir" ] || continue
+  if ! find "$ISSUE_WORKTREE/$artifact_dir" -mindepth 1 -maxdepth 1 \
+    -name "$artifact_pattern" -print0 >> "$artifact_discovery_file"; then
+    printf 'Artifact discovery failed in: %q\n' "$artifact_dir" >&2
+    exit 1
+  fi
+done
+
+while IFS= read -r -d '' artifact_file; do
+  case "$artifact_file" in
+    "$ISSUE_WORKTREE/docs/superpowers/specs/"*) artifact_dir='docs/superpowers/specs' ;;
+    "$ISSUE_WORKTREE/docs/superpowers/plans/"*) artifact_dir='docs/superpowers/plans' ;;
+    *)
+      printf 'Artifact discovery returned an unexpected path: %q\n' "$artifact_file" >&2
+      exit 1
+      ;;
+  esac
+  artifact_path="$artifact_dir/${artifact_file##*/}"
+  if git -C "$ISSUE_WORKTREE" ls-files --error-unmatch -- "$artifact_path" >/dev/null 2>&1; then
+    continue
+  fi
+  if git -C "$ISSUE_WORKTREE" check-ignore -q -- "$artifact_path" \
+    && [ -z "${recorded_artifact_set["$artifact_path"]+present}" ]; then
+    printf 'Unrecorded cleanup artifact: %q; record it in the PR artifact manifest or move/remove it manually\n' \
+      "$artifact_path" >&2
+    exit 1
+  fi
+done < "$artifact_discovery_file"
+
+# --- Delete only provenance-validated artifacts, remove worktree, delete the
+#     local and (if present) remote branch. `cd` into
 #     $WORKSPACE first — this may be running from inside $ISSUE_WORKTREE,
 #     about to disappear out from under the process's cwd. ---
 cd "$WORKSPACE"
-rm -f "$ISSUE_WORKTREE"/docs/superpowers/specs/*-design.md \
-      "$ISSUE_WORKTREE"/docs/superpowers/plans/*.md
+for artifact_parent in "${!artifact_parent_identity[@]}"; do
+  if ! parent_identity="$(
+    cd -P -- "$ISSUE_WORKTREE/$artifact_parent" \
+      && stat -Lc '%d:%i' .
+  )" || [ "$parent_identity" != "${artifact_parent_identity["$artifact_parent"]}" ]; then
+    printf 'Recorded artifact parent changed before deletion: %q\n' "$artifact_parent" >&2
+    exit 1
+  fi
+done
+for artifact_path in "${recorded_artifacts[@]}"; do
+  artifact_parent="${artifact_path%/*}"
+  artifact_basename="${artifact_path##*/}"
+  if ! (
+    cd -P -- "$ISSUE_WORKTREE/$artifact_parent" \
+      && [ "$(stat -Lc '%d:%i' .)" = "${artifact_parent_identity["$artifact_parent"]}" ] \
+      && rm -- "./$artifact_basename"
+  ); then
+    printf 'Recorded artifact parent changed before deletion: %q\n' "$artifact_parent" >&2
+    exit 1
+  fi
+done
 git worktree remove "$ISSUE_WORKTREE"
 git worktree prune
 if [ "$MERGE_MODE" = regular ]; then
@@ -102,4 +256,9 @@ test "$(git rev-parse main)" = "$(git rev-parse origin/main)"
 ISSUE_STATE="$(GH issue view "$issue_number" --json state -q .state)"
 if [ "$ISSUE_STATE" != CLOSED ]; then
   GH issue close "$issue_number"
+fi
+
+if [ "$artifact_manifest_present" -eq 1 ]; then
+  rm -- "$artifact_manifest"
+  rmdir -- "$git_common_dir/github-issue/artifacts" "$git_common_dir/github-issue" 2>/dev/null || true
 fi

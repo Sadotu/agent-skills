@@ -512,6 +512,127 @@ test_case12_unrecorded_artifact_is_ambiguous() {
     bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/$BRANCH"
 }
 
+# --- Case 13: ignored files outside the cleanup filename patterns are not
+# cleanup candidates and do not require provenance records. ---
+test_case13_unrelated_ignored_file_does_not_block() {
+  new_fixture 23 unrelated-ignored
+  local unrelated="docs/superpowers/specs/notes.txt"
+  mkdir -p "$WT/docs/superpowers/specs"
+  printf '%s\n' "unrelated ignored notes" > "$WT/$unrelated"
+  printf '%s\n' "$unrelated" > "$BASE/unrelated.exclude"
+  git -C "$WT" config core.excludesFile "$BASE/unrelated.exclude"
+  merge_branch_into_origin_main
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="CLOSED" \
+    run_cleanup "$CLONE" 23 23 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case13: unrelated ignored file does not block artifact-free cleanup" 0 "$rc"
+  assert_true "case13: normal worktree removal removes the unrelated ignored file" [ ! -e "$WT" ]
+  assert_false "case13: local branch deleted" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
+# --- Case 14: matching ignored non-regular entries are ambiguous candidates.
+# They cannot be provenance-validated as disposable regular files, so cleanup
+# must stop before mutating either entry or branch state. ---
+test_case14_matching_non_regular_entries_are_ambiguous() {
+  new_fixture 24 non-regular-artifacts
+  local matching_symlink="docs/superpowers/specs/session-link-design.md"
+  local matching_directory="docs/superpowers/plans/session-directory.md"
+  mkdir -p "$WT/docs/superpowers/specs" "$WT/$matching_directory"
+  ln -s ../plans "$WT/$matching_symlink"
+  printf '%s\n' \
+    'docs/superpowers/specs/session-*.md' \
+    'docs/superpowers/plans/session-*.md' > "$BASE/non-regular.exclude"
+  git -C "$WT" config core.excludesFile "$BASE/non-regular.exclude"
+  merge_branch_into_origin_main
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" \
+    run_cleanup "$CLONE" 24 24 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF
+
+  [ "$rc" -ne 0 ] && ok "case14: nonzero exit for matching non-regular candidates" \
+    || fail "case14: nonzero exit for matching non-regular candidates (got rc=$rc)"
+  assert_true "case14: output identifies a matching non-regular ambiguity" \
+    bash -c "grep -Fq 'record it in the PR artifact manifest or move/remove it manually' '$BASE/out.log' && { grep -Fq '$matching_symlink' '$BASE/out.log' || grep -Fq '$matching_directory' '$BASE/out.log'; }"
+  assert_true "case14: matching symlink is preserved" [ -L "$WT/$matching_symlink" ]
+  assert_true "case14: matching directory is preserved" [ -d "$WT/$matching_directory" ]
+  assert_true "case14: worktree is preserved" [ -d "$WT" ]
+  assert_true "case14: local branch is preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_true "case14: remote branch is preserved" \
+    bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
+# --- Case 15: discovery failure after partial output must fail closed. ---
+test_case15_partial_discovery_failure_preserves_everything() {
+  new_fixture 25 discovery-failure
+  local artifact="docs/superpowers/specs/session-25-design.md"
+  mkdir -p "$WT/docs/superpowers/specs"
+  printf '%s\n' "recorded artifact" > "$WT/$artifact"
+  printf '%s\n' 'docs/superpowers/specs/session-*.md' > "$BASE/discovery.exclude"
+  git -C "$WT" config core.excludesFile "$BASE/discovery.exclude"
+  record_artifacts 25 "$artifact"
+  merge_branch_into_origin_main
+
+  cat > "$STUBBIN/find" <<'SHIM'
+#!/usr/bin/env bash
+printf '%s\0' "$FIND_PARTIAL_PATH"
+exit 1
+SHIM
+  chmod +x "$STUBBIN/find"
+  export FIND_PARTIAL_PATH="$WT/$artifact"
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" \
+    run_cleanup "$CLONE" 25 25 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF FIND_PARTIAL_PATH
+
+  [ "$rc" -ne 0 ] && ok "case15: nonzero exit when artifact discovery fails" \
+    || fail "case15: nonzero exit when artifact discovery fails (got rc=$rc)"
+  assert_true "case15: output reports artifact discovery failure" \
+    bash -c "grep -Fq 'Artifact discovery failed' '$BASE/out.log'"
+  assert_eq "case15: recorded artifact is preserved" "recorded artifact" \
+    "$(cat "$WT/$artifact" 2>/dev/null)"
+  assert_true "case15: worktree is preserved" [ -d "$WT" ]
+  assert_true "case15: local branch is preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_true "case15: remote branch is preserved" \
+    bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
+# --- Case 16: an artifact parent that is already a symlink is never used as
+# a deletion anchor, and same-name external content remains untouched. ---
+test_case16_symlinked_artifact_parent_is_refused() {
+  new_fixture 26 symlinked-parent
+  local artifact="docs/superpowers/specs/session-26-design.md"
+  local external="$BASE/external-specs"
+  mkdir -p "$WT/docs/superpowers" "$external"
+  printf '%s\n' "external content" > "$external/session-26-design.md"
+  ln -s "$external" "$WT/docs/superpowers/specs"
+  printf '%s\n' 'docs/superpowers/specs/session-*.md' > "$BASE/symlink-parent.exclude"
+  git -C "$WT" config core.excludesFile "$BASE/symlink-parent.exclude"
+  record_artifacts 26 "$artifact"
+  merge_branch_into_origin_main
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" \
+    run_cleanup "$CLONE" 26 26 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF
+
+  [ "$rc" -ne 0 ] && ok "case16: nonzero exit for a symlinked artifact parent" \
+    || fail "case16: nonzero exit for a symlinked artifact parent (got rc=$rc)"
+  assert_eq "case16: external same-name content is unchanged" "external content" \
+    "$(cat "$external/session-26-design.md")"
+  assert_true "case16: symlinked parent is preserved" [ -L "$WT/docs/superpowers/specs" ]
+  assert_true "case16: worktree is preserved" [ -d "$WT" ]
+  assert_true "case16: local branch is preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
 test_case1_not_merged
 test_case2_non_agent_branch
 test_case3_not_ancestor
@@ -524,6 +645,10 @@ test_case9_rebase_merge
 test_case10_whitespace_only_squash_diff
 test_case11_mixed_tracked_and_recorded_artifacts
 test_case12_unrecorded_artifact_is_ambiguous
+test_case13_unrelated_ignored_file_does_not_block
+test_case14_matching_non_regular_entries_are_ambiguous
+test_case15_partial_discovery_failure_preserves_everything
+test_case16_symlinked_artifact_parent_is_refused
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
