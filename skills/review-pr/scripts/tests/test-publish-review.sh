@@ -32,8 +32,9 @@ assert_contains() {
 }
 
 # write_gh_shim <path> — fake `gh`. `pr view --json headRefOid,...` (no
-# comments) returns full PR JSON from STUB_HEAD/STUB_BASE/STUB_PR_BODY/
-# STUB_PR_UPDATED. `issue view` returns issue JSON from
+# comments) returns PR JSON from STUB_HEAD/STUB_PR_BODY/STUB_PR_UPDATED.
+# `api repos/testowner/testrepo/pulls/<pr> --jq .base.sha` returns
+# STUB_BASE. `issue view` returns issue JSON from
 # STUB_ISSUE_BODY/STUB_ISSUE_UPDATED. `pr view --json comments` returns
 # STUB_COMMENTS_JSON_FILE verbatim — a fixture file holding a full
 # `{"comments":[{"body":...,"viewerDidAuthor":...}, ...]}` document, exactly
@@ -54,8 +55,17 @@ case "$1 $2" in
     if printf '%s\n' "$*" | grep -q -- '--json comments'; then
       cat "${STUB_COMMENTS_JSON_FILE:-/dev/null}"
     else
-      jq -n --arg head "$STUB_HEAD" --arg base "$STUB_BASE" --arg body "$STUB_PR_BODY" --arg updated "$STUB_PR_UPDATED" \
-        '{headRefOid:$head, baseRefOid:$base, body:$body, updatedAt:$updated}'
+      jq -n --arg head "$STUB_HEAD" --arg body "$STUB_PR_BODY" --arg updated "$STUB_PR_UPDATED" \
+        '{headRefOid:$head, body:$body, updatedAt:$updated}'
+    fi
+    ;;
+  "api "*)
+    if [ "$#" -eq 4 ] && [[ "$2" =~ ^repos/testowner/testrepo/pulls/[0-9]+$ ]] \
+      && [ "$3" = "--jq" ] && [ "$4" = ".base.sha" ]; then
+      echo "$STUB_BASE"
+    else
+      echo "unexpected gh api invocation: $*" >&2
+      exit 1
     fi
     ;;
   "issue view")

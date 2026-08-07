@@ -15,11 +15,11 @@ compute_snapshot_json() {
   local pr="$1" issue="$2"
   local pr_json issue_json head base pr_body issue_body pr_updated_at issue_updated_at fp
 
-  pr_json="$(GH pr view "$pr" --json headRefOid,baseRefOid,body,updatedAt)"
+  pr_json="$(GH pr view "$pr" --json headRefOid,body,updatedAt)"
   issue_json="$(GH issue view "$issue" --json body,updatedAt)"
 
   head="$(printf '%s' "$pr_json" | jq -r .headRefOid)"
-  base="$(printf '%s' "$pr_json" | jq -r .baseRefOid)"
+  base="$(GH api "repos/$REPO/pulls/$pr" --jq .base.sha)"
   pr_body="$(printf '%s' "$pr_json" | jq -r .body)"
   pr_updated_at="$(printf '%s' "$pr_json" | jq -r .updatedAt)"
   issue_body="$(printf '%s' "$issue_json" | jq -r .body)"

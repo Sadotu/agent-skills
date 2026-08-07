@@ -16,8 +16,20 @@ WORKSPACE="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 
 
 if [ -x /opt/agent-devcontainer/gh-app-token.sh ]; then
   # devcontainer: mint a short-lived GitHub App token per call
-  GH() { GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@" --repo "$REPO"; }
+  GH() {
+    if [ "${1:-}" = api ]; then
+      GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@"
+    else
+      GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@" --repo "$REPO"
+    fi
+  }
 else
   # elsewhere: use your own authenticated gh (run `gh auth login` first)
-  GH() { gh "$@" --repo "$REPO"; }
+  GH() {
+    if [ "${1:-}" = api ]; then
+      gh "$@"
+    else
+      gh "$@" --repo "$REPO"
+    fi
+  }
 fi
