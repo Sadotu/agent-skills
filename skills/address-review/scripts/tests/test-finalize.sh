@@ -57,16 +57,29 @@ SH
 chmod +x "$BIN/git"
 
 write_evidence() {
-  jq -n --arg status "${1:-success}" --arg command "npm test" --arg result "42 tests passed" \
+  jq -n --arg status "${1:-success}" --arg command "${2-npm test}" --arg result "${3-42 tests passed}" \
     '{status:$status,command:$command,result:$result}' > "$BASE/verification.json"
 }
 
 run_case() {
   local name="$1"; shift
   : > "$LOG"
-  (cd "$WT" && PATH="$BIN:$PATH" REAL_GIT="$REAL_GIT" ACTION_LOG="$LOG" "$FINALIZE" "$@") \
+  (cd "${CASE_CWD:-$WT}" && PATH="$BIN:$PATH" REAL_GIT="$REAL_GIT" ACTION_LOG="$LOG" "$FINALIZE" "$@") \
     >"$BASE/$name.out" 2>"$BASE/$name.err"
   CASE_RC=$?
+}
+
+reject_case() {
+  local name="$1" message="$2"; shift 2
+  run_case "$name" "$@"
+  assert_eq "$name: rejected" 1 "$CASE_RC"
+  assert_contains "$name: useful error" "$BASE/$name.err" "$message"
+  if grep -q '^git push ' "$LOG"; then fail "$name: no push"; else ok "$name: no push"; fi
+  if grep -Eiq 'gh .*(create|edit|comment|label|ready|review|approve|merge)|git worktree (add|remove)' "$LOG"; then
+    fail "$name: forbidden actions absent"
+  else
+    ok "$name: forbidden actions absent"
+  fi
 }
 
 write_evidence success
@@ -91,6 +104,32 @@ if grep -Eiq 'gh .*(create|edit|comment|label|ready|review|approve|merge)|git wo
 else
   ok "forbidden actions: absent"
 fi
+
+reject_case bad-issue "invalid issue-number" nope 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+reject_case bad-pr "invalid pr-number" 26 nope "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+reject_case nonexistent-worktree "worktree does not exist" 26 44 "$INSPECTED_HEAD" agent/26-repair "$BASE/missing" "$BASE/verification.json"
+reject_case wrong-branch "worktree/branch identity" 26 44 "$INSPECTED_HEAD" agent/26-other "$WT" "$BASE/verification.json"
+CASE_CWD="$REPO" reject_case wrong-cwd "exact worktree" 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+STUB_BRANCH=agent/26-changed reject_case changed-pr-branch "head branch changed" 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+reject_case missing-inspected-head "inspected head is not a commit" 26 44 deadbeef agent/26-repair "$WT" "$BASE/verification.json"
+reject_case same-inspected-head "at least one new commit" 26 44 "$REPAIR_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+
+printf 'main advance\n' > "$REPO/main.txt"
+"$REAL_GIT" -C "$REPO" add main.txt
+"$REAL_GIT" -C "$REPO" commit -qm 'main advance'
+NON_DESCENDANT="$("$REAL_GIT" -C "$REPO" rev-parse HEAD)"
+reject_case non-descendant-head "not an ancestor" 26 44 "$NON_DESCENDANT" agent/26-repair "$WT" "$BASE/verification.json"
+
+printf 'dirty\n' >> "$WT/change.txt"
+reject_case dirty-tracked "tracked worktree changes" 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+"$REAL_GIT" -C "$WT" restore change.txt
+
+printf '{broken}\n' > "$BASE/verification.json"
+reject_case malformed-evidence "verification evidence" 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+write_evidence success '' '42 tests passed'
+reject_case empty-command "verification evidence" 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+write_evidence success 'npm test' ''
+reject_case empty-result "verification evidence" 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
 
 echo "1..$((PASS + FAIL))"
 echo "# pass $PASS fail $FAIL"
