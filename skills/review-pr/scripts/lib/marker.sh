@@ -52,3 +52,70 @@ marker_own_fingerprints() {
     printf '%s\n' "$fp"
   done
 }
+
+# resolve_trusted_review_marker <comments-json> <fingerprint> <issue> <pr> <required-verdict>
+# — given the raw JSON object from `gh ... --json comments`, proves that
+# exactly ONE marker authored by the reviewing identity (viewerDidAuthor)
+# matches <fingerprint> AND names <issue>/<pr> AND carries
+# <required-verdict>, then prints that marker's payload as one line of
+# JSON. Returns 1 with a reason on stderr otherwise.
+#
+# Fail-closed on purpose: a malformed own marker anywhere on the PR, or
+# two markers claiming the same fingerprint, refuses rather than picking
+# one — a caller relying on a prior verdict must not act on an ambiguous
+# or tampered history. Foreign-authored comments are never considered
+# (the fingerprint is derivable from public data, so an outsider could
+# otherwise forge a PASS).
+resolve_trusted_review_marker() {
+  local comments_json="$1" want_fp="$2" want_issue="$3" want_pr="$4" want_verdict="$5"
+  local encoded body clean tag_count payloads payload_count payload
+  local found="" saw_fingerprint=0
+
+  while IFS= read -r encoded; do
+    [ -n "$encoded" ] || continue
+    body="$(printf '%s' "$encoded" | base64 -d)"
+    clean="$(printf '%s' "$body" | tr -d '\r')"
+    tag_count="$(printf '%s\n' "$clean" | { grep -oF "<!-- $MARKER_TAG_REVIEW " || true; } | wc -l)"
+    [ "$tag_count" -gt 0 ] || continue
+    payloads="$(extract_markers "$clean" "$MARKER_TAG_REVIEW")"
+    payload_count="$(printf '%s\n' "$payloads" | awk 'NF { n++ } END { print n+0 }')"
+    if [ "$tag_count" -ne "$payload_count" ]; then
+      echo "previous review marker is not well-formed" >&2
+      return 1
+    fi
+    while IFS= read -r payload; do
+      [ -n "$payload" ] || continue
+      if ! printf '%s' "$payload" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        echo "previous review marker is not well-formed JSON" >&2
+        return 1
+      fi
+      [ "$(printf '%s' "$payload" | jq -r '.fingerprint // empty')" = "$want_fp" ] || continue
+      saw_fingerprint=1
+      if [ "$(printf '%s' "$payload" | jq -r '.issue // empty')" != "$want_issue" ] \
+        || [ "$(printf '%s' "$payload" | jq -r '.pr // empty')" != "$want_pr" ]; then
+        echo "previous review marker issue/pr does not match #$want_issue/PR #$want_pr" >&2
+        return 1
+      fi
+      if [ "$(printf '%s' "$payload" | jq -r '.verdict // empty')" != "$want_verdict" ]; then
+        echo "previous review marker verdict must be $want_verdict" >&2
+        return 1
+      fi
+      if [ -n "$found" ]; then
+        echo "found multiple trusted review markers for fingerprint $want_fp" >&2
+        return 1
+      fi
+      found="$payload"
+    done <<< "$payloads"
+  done < <(printf '%s' "$comments_json" | jq -r '.comments[] | select(.viewerDidAuthor == true) | .body | @base64')
+
+  if [ -z "$found" ]; then
+    if [ "$saw_fingerprint" -eq 1 ]; then
+      echo "no trusted review marker for fingerprint $want_fp" >&2
+    else
+      echo "no trusted review marker for fingerprint $want_fp (missing, or authored by another identity)" >&2
+    fi
+    return 1
+  fi
+
+  printf '%s\n' "$found"
+}
