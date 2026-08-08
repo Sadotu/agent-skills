@@ -60,7 +60,7 @@ SH
 chmod +x "$BIN/gh"
 
 ISSUE_BODY="managed issue"; PR_BODY=$'repair details\n\nCloses #26'
-HEAD=deadbeef BASE_SHA=cafebabe
+HEAD="$("$REAL_GIT" -C "$WT" rev-parse HEAD)"; BASE_SHA=cafebabe
 FP="$(printf '%s\x1e%s\x1e%s\x1e%s' "$HEAD" "$BASE_SHA" "$ISSUE_BODY" "$PR_BODY" | sha256sum | awk '{print $1}')"
 GOOD_BODY=$'Automated review\n<!-- review-pr:v1 {"issue":26,"pr":44,"fingerprint":"'"$FP"'","verdict":"BLOCKING"} -->'
 DEFAULT_WORKTREES="worktree $REPO\nHEAD 0000\nbranch refs/heads/main\n\nworktree $WT\nHEAD $HEAD\nbranch refs/heads/agent/26-repair\n\n"
@@ -107,6 +107,9 @@ CASE_PR_BODY="mentions #26 without closure"; reject_case link "closing linkage"
 CASE_BRANCH="feature/26-repair"; reject_case branch "managed branch"
 CASE_WORKTREES="worktree $REPO\nHEAD 0000\nbranch refs/heads/main\n\n"; reject_case missing-worktree "exactly one worktree"
 CASE_WORKTREES="$DEFAULT_WORKTREES"$'worktree /tmp/duplicate\nHEAD deadbeef\nbranch refs/heads/agent/26-repair\n\n'; reject_case duplicate-worktree "exactly one worktree"
+"$REAL_GIT" -C "$WT" commit --allow-empty -qm local-only
+reject_case mismatched-worktree-head "worktree HEAD does not match reviewed PR head"
+"$REAL_GIT" -C "$WT" reset -q --hard "$HEAD"
 
 CASE_COMMENTS="$(jq -nc --arg body "$GOOD_BODY" '[{viewerDidAuthor:false,body:$body}]')"; reject_case foreign "trusted review marker"
 CASE_COMMENTS='[{"viewerDidAuthor":true,"body":"<!-- review-pr:v1 {broken} -->"}]'; reject_case malformed "well-formed"

@@ -74,6 +74,10 @@ snapshot="$(compute_snapshot_json "$pr" "$issue")"
 current_fingerprint="$(printf '%s' "$snapshot" | jq -r .fingerprint)"
 [ "$current_fingerprint" = "$fingerprint" ] \
   || die "review fingerprint is stale: current snapshot is $current_fingerprint"
+reviewed_head="$(printf '%s' "$snapshot" | jq -r .head)"
+worktree_head="$(git -C "$worktree" rev-parse HEAD)"
+[ "$worktree_head" = "$reviewed_head" ] \
+  || die "worktree HEAD does not match reviewed PR head: expected $reviewed_head, found $worktree_head"
 
 printf '%s' "$snapshot" | jq -c \
   --arg branch "$branch" --arg worktree "$worktree" --arg commentBodyBase64 "$trusted_encoded" \
