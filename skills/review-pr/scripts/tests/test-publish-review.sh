@@ -28,7 +28,9 @@ assert_eq() {
 
 assert_contains() {
   local desc="$1" file="$2" pattern="$3"
-  if grep -qF "$pattern" "$file"; then ok "$desc"; else fail "$desc (missing [$pattern] in $file)"; fi
+  # "--" stops grep from parsing a pattern that itself starts with "--"
+  # (e.g. "--previous-fingerprint") as an option flag.
+  if grep -qF -- "$pattern" "$file"; then ok "$desc"; else fail "$desc (missing [$pattern] in $file)"; fi
 }
 
 # write_gh_shim <path> — fake `gh`. `pr view --json headRefOid,...` (no
@@ -287,6 +289,152 @@ STUB_ISSUE_BODY="issue text" STUB_ISSUE_UPDATED="2026-07-31T00:00:00Z"
 out9d="$(run_publish 5 6 "$fp9" PASS 2>"$BASE/err9d.log")"
 assert_eq "case9: pr-body-only change -> stale (exit 3)" 3 "$?"
 assert_contains "case9: pr-body-only change reports STALE" "$BASE/err9d.log" "STALE"
+
+# ---------------- integration mode ----------------
+
+# integration_marker <fp> <issue> <pr> <verdict> [viewerDidAuthor] — a
+# prior full-review marker with head/base, as publish-review.sh posts it.
+integration_marker() {
+  local fp="$1" issue="$2" pr="$3" verdict="$4" author="${5:-true}"
+  jq -nc --arg fp "$fp" --argjson issue "$issue" --argjson pr "$pr" \
+    --arg verdict "$verdict" --argjson author "$author" \
+    '{body: ("<!-- review-pr:v1 "
+             + ({fingerprint:$fp, head:"prevhead", base:"prevbase", issue:$issue, pr:$pr, pass:1, verdict:$verdict} | tojson)
+             + " -->"),
+      viewerDidAuthor: $author}'
+}
+
+run_publish_integration() {
+  local pr="$1" issue="$2" fp="$3" verdict="$4" prev="$5"
+  PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
+    STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
+    STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
+    STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
+    "$PUBLISH" "$pr" "$issue" "$fp" "$verdict" "$BODY_FILE" --mode integration --previous-fingerprint "$prev"
+}
+
+# --- Case 10: integration PASS publishes with additive marker fields ---
+new_fixture
+common_stubs
+write_comments "$(integration_marker prevfp 6 5 PASS)"
+fp10="$(run_snapshot 5 6)"
+out10="$(run_publish_integration 5 6 "$fp10" PASS prevfp)"
+rc10=$?
+assert_eq "case10: exits 0 on a valid integration pass" 0 "$rc10"
+assert_eq "case10: marker carries mode integration" "integration" "$(printf '%s' "$out10" | jq -r .mode)"
+assert_eq "case10: marker carries previousFingerprint" "prevfp" "$(printf '%s' "$out10" | jq -r .previousFingerprint)"
+assert_eq "case10: verdict PASS" "PASS" "$(printf '%s' "$out10" | jq -r .verdict)"
+assert_eq "case10: pass number counts the prior marker" 2 "$(printf '%s' "$out10" | jq -r .pass)"
+assert_contains "case10: body identifies integration mode" "$POSTED_BODY_FILE" "Integration review"
+assert_contains "case10: body names previous head" "$POSTED_BODY_FILE" "prevhead"
+assert_contains "case10: body names previous base" "$POSTED_BODY_FILE" "prevbase"
+assert_contains "case10: body names current head" "$POSTED_BODY_FILE" "deadbeef"
+assert_contains "case10: body names current base" "$POSTED_BODY_FILE" "cafef00d"
+assert_contains "case10: body keeps the review text" "$POSTED_BODY_FILE" "Review findings go here."
+
+# --- Case 11: integration BLOCKING uses the same verdict contract ---
+new_fixture
+common_stubs
+write_comments "$(integration_marker prevfp 6 5 PASS)"
+fp11="$(run_snapshot 5 6)"
+out11="$(run_publish_integration 5 6 "$fp11" BLOCKING prevfp)"
+assert_eq "case11: exits 0 on integration BLOCKING" 0 "$?"
+assert_eq "case11: verdict BLOCKING" "BLOCKING" "$(printf '%s' "$out11" | jq -r .verdict)"
+assert_eq "case11: marker still carries mode integration" "integration" "$(printf '%s' "$out11" | jq -r .mode)"
+
+# --- Case 12: full review is unchanged — no mode/previousFingerprint keys ---
+new_fixture
+common_stubs
+fp12="$(run_snapshot 5 6)"
+out12="$(run_publish 5 6 "$fp12" PASS)"
+assert_eq "case12: full-review marker has no mode key" "false" "$(printf '%s' "$out12" | jq 'has("mode")')"
+assert_eq "case12: full-review marker has no previousFingerprint key" "false" "$(printf '%s' "$out12" | jq 'has("previousFingerprint")')"
+assert_eq "case12: full-review body has no integration header" "" "$(grep -F 'Integration review' "$POSTED_BODY_FILE" || true)"
+
+# --- Case 13: missing prior marker -> exit 5, nothing posted ---
+new_fixture
+common_stubs
+fp13="$(run_snapshot 5 6)"
+out13="$(run_publish_integration 5 6 "$fp13" PASS prevfp 2>"$BASE/err13.log")"
+rc13=$?
+assert_eq "case13: exits 5 when the prior marker is missing" 5 "$rc13"
+assert_eq "case13: nothing posted" "" "$out13"
+assert_eq "case13: gh pr comment never called" "" "$(grep 'pr comment' "$GH_LOG" || true)"
+assert_contains "case13: UNTRUSTED reported on stderr" "$BASE/err13.log" "UNTRUSTED"
+
+# --- Case 14: untrusted prior markers -> exit 5 ---
+new_fixture
+common_stubs
+write_comments "$(integration_marker prevfp 6 5 PASS false)"
+fp14a="$(run_snapshot 5 6)"
+run_publish_integration 5 6 "$fp14a" PASS prevfp >/dev/null 2>&1
+assert_eq "case14: foreign-authored prior marker -> exit 5" 5 "$?"
+
+new_fixture
+common_stubs
+write_comments "$(integration_marker prevfp 6 5 BLOCKING)"
+fp14b="$(run_snapshot 5 6)"
+run_publish_integration 5 6 "$fp14b" PASS prevfp >/dev/null 2>&1
+assert_eq "case14: prior BLOCKING marker -> exit 5" 5 "$?"
+
+new_fixture
+common_stubs
+write_comments "$(integration_marker prevfp 99 5 PASS)"
+fp14c="$(run_snapshot 5 6)"
+run_publish_integration 5 6 "$fp14c" PASS prevfp >/dev/null 2>&1
+assert_eq "case14: wrong-pair prior marker -> exit 5" 5 "$?"
+
+# --- Case 15: stale current snapshot beats prior-marker resolution ---
+new_fixture
+common_stubs
+write_comments "$(integration_marker prevfp 6 5 PASS)"
+run_publish_integration 5 6 "not-the-real-fingerprint" PASS prevfp >/dev/null 2>"$BASE/err15.log"
+assert_eq "case15: stale current snapshot -> exit 3" 3 "$?"
+assert_contains "case15: STALE reported on stderr" "$BASE/err15.log" "STALE"
+assert_eq "case15: nothing posted while stale" "" "$(grep 'pr comment' "$GH_LOG" || true)"
+
+# --- Case 16: duplicate current snapshot stays idempotent ---
+new_fixture
+common_stubs
+fp16="$(run_snapshot 5 6)"
+write_comments "$(integration_marker prevfp 6 5 PASS)" "$(marker_comment "$fp16" 2 PASS)"
+run_publish_integration 5 6 "$fp16" PASS prevfp >/dev/null 2>"$BASE/err16.log"
+assert_eq "case16: already-reviewed current snapshot -> exit 4" 4 "$?"
+assert_contains "case16: DUPLICATE reported on stderr" "$BASE/err16.log" "DUPLICATE"
+assert_eq "case16: nothing posted on duplicate" "" "$(grep 'pr comment' "$GH_LOG" || true)"
+
+# --- Case 17: the flags are a required pair ---
+new_fixture
+common_stubs
+fp17="$(run_snapshot 5 6)"
+PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
+  STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
+  STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
+  STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
+  "$PUBLISH" 5 6 "$fp17" PASS "$BODY_FILE" --mode integration >/dev/null 2>"$BASE/err17.log"
+assert_eq "case17: --mode without --previous-fingerprint -> exit 1" 1 "$?"
+assert_contains "case17: clear error message" "$BASE/err17.log" "--previous-fingerprint"
+
+new_fixture
+common_stubs
+fp17b="$(run_snapshot 5 6)"
+PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
+  STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
+  STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
+  STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
+  "$PUBLISH" 5 6 "$fp17b" PASS "$BODY_FILE" --previous-fingerprint prevfp >/dev/null 2>"$BASE/err17b.log"
+assert_eq "case17: --previous-fingerprint without --mode -> exit 1" 1 "$?"
+
+new_fixture
+common_stubs
+fp17c="$(run_snapshot 5 6)"
+PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
+  STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
+  STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
+  STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
+  "$PUBLISH" 5 6 "$fp17c" PASS "$BODY_FILE" --mode full --previous-fingerprint prevfp >/dev/null 2>"$BASE/err17c.log"
+assert_eq "case17: unknown --mode value -> exit 1" 1 "$?"
+assert_contains "case17: names the only valid mode" "$BASE/err17c.log" "integration"
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

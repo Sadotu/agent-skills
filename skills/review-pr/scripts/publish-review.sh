@@ -11,13 +11,15 @@
 #   4  duplicate — a review-pr:v1 marker for this exact fingerprint already
 #      exists on the PR; nothing posted. This is the idempotent-rerun path,
 #      not an error.
+#   5  the prior trusted PASS named by --previous-fingerprint could not be
+#      resolved; nothing posted. The caller must run a full review.
 #  other nonzero — genuine script error (bad args, gh failure, etc).
 #
-# Usage: publish-review.sh <pr-number> <issue-number> <expected-fingerprint> <PASS|BLOCKING> <body-file>
+# Usage: publish-review.sh <pr-number> <issue-number> <expected-fingerprint> <PASS|BLOCKING> <body-file> [--mode integration --previous-fingerprint <fingerprint>]
 set -euo pipefail
 
-if [ "$#" -ne 5 ]; then
-  echo "usage: publish-review.sh <pr-number> <issue-number> <expected-fingerprint> <PASS|BLOCKING> <body-file>" >&2
+if [ "$#" -lt 5 ]; then
+  echo "usage: publish-review.sh <pr-number> <issue-number> <expected-fingerprint> <PASS|BLOCKING> <body-file> [--mode integration --previous-fingerprint <fingerprint>]" >&2
   exit 1
 fi
 
@@ -26,6 +28,35 @@ issue_number="$2"
 expected_fingerprint="$3"
 verdict="$4"
 body_file="$5"
+shift 5
+
+mode=""
+previous_fingerprint=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --mode)
+      [ "$#" -ge 2 ] || { echo "--mode requires a value (only 'integration' is valid)" >&2; exit 1; }
+      mode="$2"; shift 2 ;;
+    --previous-fingerprint)
+      [ "$#" -ge 2 ] || { echo "--previous-fingerprint requires a value" >&2; exit 1; }
+      previous_fingerprint="$2"; shift 2 ;;
+    *)
+      echo "unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [ -n "$mode" ] && [ "$mode" != integration ]; then
+  echo "invalid mode: $mode (only 'integration' is valid; omit --mode for a full review)" >&2
+  exit 1
+fi
+if [ -n "$mode" ] && [ -z "$previous_fingerprint" ]; then
+  echo "--mode integration requires --previous-fingerprint <fingerprint>" >&2
+  exit 1
+fi
+if [ -z "$mode" ] && [ -n "$previous_fingerprint" ]; then
+  echo "--previous-fingerprint requires --mode integration" >&2
+  exit 1
+fi
 
 case "$pr_number" in
   ''|*[!0-9]*) echo "invalid pr-number: $pr_number" >&2; exit 1 ;;
@@ -63,6 +94,21 @@ issue_updated_at="$(printf '%s' "$current" | jq -r .issueUpdatedAt)"
 pr_updated_at="$(printf '%s' "$current" | jq -r .prUpdatedAt)"
 
 comments_json="$(GH pr view "$pr_number" --json comments)"
+
+previous_marker=""
+if [ -n "$mode" ]; then
+  rc=0
+  previous_marker="$(resolve_trusted_review_marker \
+    "$comments_json" "$previous_fingerprint" "$issue_number" "$pr_number" PASS)" || rc=$?
+  if [ "$rc" -eq 1 ]; then
+    echo "UNTRUSTED: cannot publish an integration review on fingerprint $previous_fingerprint — run a full review" >&2
+    exit 5
+  elif [ "$rc" -ne 0 ]; then
+    echo "ERROR: resolve_trusted_review_marker failed internally (exit $rc) — this is a script/environment error, not an untrusted marker" >&2
+    exit "$rc"
+  fi
+fi
+
 existing_fps="$(marker_own_fingerprints "$comments_json" "$MARKER_TAG_REVIEW")"
 
 pass_count="$(printf '%s\n' "$existing_fps" | grep -c . || true)"
@@ -89,11 +135,34 @@ marker_json_body="$(jq -nc \
   --arg verdict "$verdict" \
   '{fingerprint: $fp, head: $head, base: $base, issueUpdatedAt: $issueUpdatedAt, prUpdatedAt: $prUpdatedAt,
     issue: $issue, pr: $pr, pass: $pass, verdict: $verdict}')"
+
+if [ -n "$mode" ]; then
+  marker_json_body="$(printf '%s' "$marker_json_body" | jq -c \
+    --arg mode "$mode" --arg prev "$previous_fingerprint" \
+    '. + {mode: $mode, previousFingerprint: $prev}')"
+fi
+
 marker="$(marker_line "$MARKER_TAG_REVIEW" "$marker_json_body")"
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-cat "$body_file" > "$tmp"
+if [ -n "$mode" ]; then
+  # Generated, not authored: the acceptance contract requires every
+  # integration comment to name its mode and both snapshots' head/base, so
+  # it must not depend on the reviewer remembering to write them.
+  previous_head="$(printf '%s' "$previous_marker" | jq -r '.head // "unknown"')"
+  previous_base="$(printf '%s' "$previous_marker" | jq -r '.base // "unknown"')"
+  {
+    printf '**Integration review** — revalidating an earlier `PASS` against the current base.\n\n'
+    printf -- '- Previous snapshot: head `%s`, base `%s` (fingerprint `%s`)\n' \
+      "$previous_head" "$previous_base" "$previous_fingerprint"
+    printf -- '- Current snapshot: head `%s`, base `%s` (fingerprint `%s`)\n\n' \
+      "$head_sha" "$base_sha" "$current_fingerprint"
+  } > "$tmp"
+  cat "$body_file" >> "$tmp"
+else
+  cat "$body_file" > "$tmp"
+fi
 printf '\n\n%s\n' "$marker" >> "$tmp"
 
 # `gh pr comment` prints the created comment's URL to stdout — capture it
