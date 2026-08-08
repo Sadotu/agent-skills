@@ -299,7 +299,7 @@ integration_marker() {
   jq -nc --arg fp "$fp" --argjson issue "$issue" --argjson pr "$pr" \
     --arg verdict "$verdict" --argjson author "$author" \
     '{body: ("<!-- review-pr:v1 "
-             + ({fingerprint:$fp, head:"prevhead", base:"prevbase", issue:$issue, pr:$pr, pass:1, verdict:$verdict} | tojson)
+             + ({fingerprint:$fp, head:"1111111111111111111111111111111111111111", base:"2222222222222222222222222222222222222222", issue:$issue, pr:$pr, pass:1, verdict:$verdict} | tojson)
              + " -->"),
       viewerDidAuthor: $author}'
 }
@@ -326,8 +326,8 @@ assert_eq "case10: marker carries previousFingerprint" "prevfp" "$(printf '%s' "
 assert_eq "case10: verdict PASS" "PASS" "$(printf '%s' "$out10" | jq -r .verdict)"
 assert_eq "case10: pass number counts the prior marker" 2 "$(printf '%s' "$out10" | jq -r .pass)"
 assert_contains "case10: body identifies integration mode" "$POSTED_BODY_FILE" "Integration review"
-assert_contains "case10: body names previous head" "$POSTED_BODY_FILE" "prevhead"
-assert_contains "case10: body names previous base" "$POSTED_BODY_FILE" "prevbase"
+assert_contains "case10: body names previous head" "$POSTED_BODY_FILE" "1111111111111111111111111111111111111111"
+assert_contains "case10: body names previous base" "$POSTED_BODY_FILE" "2222222222222222222222222222222222222222"
 # Anchored to the "Current snapshot" header bullet itself, not a bare SHA —
 # a bare "deadbeef"/"cafef00d" check would pass even with the header
 # deleted entirely, since the trailing review-pr:v1 marker line also
@@ -365,6 +365,15 @@ assert_eq "case13: exits 5 when the prior marker is missing" 5 "$rc13"
 assert_eq "case13: nothing posted" "" "$out13"
 assert_eq "case13: gh pr comment never called" "" "$(grep 'pr comment' "$GH_LOG" || true)"
 assert_contains "case13: UNTRUSTED reported on stderr" "$BASE/err13.log" "UNTRUSTED"
+
+# --- Case 13b: prior marker without snapshot commits -> exit 5, nothing posted ---
+new_fixture
+common_stubs
+jq -nc '{comments: [{body: ("<!-- review-pr:v1 " + ({fingerprint:"prevfp", issue:6, pr:5, verdict:"PASS"} | tojson) + " -->"), viewerDidAuthor:true}]}' > "$COMMENTS_FILE"
+fp13b="$(run_snapshot 5 6)"
+run_publish_integration 5 6 "$fp13b" PASS prevfp >/dev/null 2>"$BASE/err13b.log"
+assert_eq "case13b: missing prior head/base -> exit 5" 5 "$?"
+assert_eq "case13b: gh pr comment never called" "" "$(grep 'pr comment' "$GH_LOG" || true)"
 
 # --- Case 14: untrusted prior markers -> exit 5 ---
 new_fixture

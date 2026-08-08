@@ -161,8 +161,8 @@ if [ -n "$mode" ]; then
   # Generated, not authored: the acceptance contract requires every
   # integration comment to name its mode and both snapshots' head/base, so
   # it must not depend on the reviewer remembering to write them.
-  previous_head="$(printf '%s' "$previous_marker" | jq -r '.head // "unknown"')"
-  previous_base="$(printf '%s' "$previous_marker" | jq -r '.base // "unknown"')"
+  previous_head="$(printf '%s' "$previous_marker" | jq -r '.head')"
+  previous_base="$(printf '%s' "$previous_marker" | jq -r '.base')"
   {
     printf '**Integration review** — revalidating an earlier `PASS` against the current base.\n\n'
     printf -- '- Previous snapshot: head `%s`, base `%s` (fingerprint `%s`)\n' \

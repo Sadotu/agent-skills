@@ -114,6 +114,13 @@ resolve_trusted_review_marker() {
         echo "previous review marker verdict must be $want_verdict" >&2
         return 1
       fi
+      if ! printf '%s' "$payload" | jq -e '
+        (.head | type == "string" and test("^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$")) and
+        (.base | type == "string" and test("^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"))
+      ' >/dev/null 2>&1; then
+        echo "previous review marker head/base must be full commit IDs" >&2
+        return 1
+      fi
       if [ -n "$found" ]; then
         echo "found multiple trusted review markers for fingerprint $want_fp" >&2
         return 1

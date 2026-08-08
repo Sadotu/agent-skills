@@ -72,7 +72,7 @@ marker_comment() {
   jq -nc --arg fp "$fp" --argjson issue "$issue" --argjson pr "$pr" \
     --arg verdict "$verdict" --argjson author "$author" \
     '{body: ("<!-- review-pr:v1 "
-             + ({fingerprint:$fp, head:"headsha", base:"basesha", issue:$issue, pr:$pr, pass:1, verdict:$verdict} | tojson)
+             + ({fingerprint:$fp, head:"1111111111111111111111111111111111111111", base:"2222222222222222222222222222222222222222", issue:$issue, pr:$pr, pass:1, verdict:$verdict} | tojson)
              + " -->"),
       viewerDidAuthor: $author}'
 }
@@ -94,8 +94,8 @@ rc1=$?
 assert_eq "case1: exits 0 on a trusted prior PASS" 0 "$rc1"
 assert_eq "case1: stdout is a single line" 1 "$(printf '%s\n' "$out1" | wc -l | tr -d ' ')"
 assert_eq "case1: payload fingerprint" "prevfp" "$(printf '%s' "$out1" | jq -r .fingerprint)"
-assert_eq "case1: payload head available for the base diff" "headsha" "$(printf '%s' "$out1" | jq -r .head)"
-assert_eq "case1: payload base available for the base diff" "basesha" "$(printf '%s' "$out1" | jq -r .base)"
+assert_eq "case1: payload head available for the base diff" "1111111111111111111111111111111111111111" "$(printf '%s' "$out1" | jq -r .head)"
+assert_eq "case1: payload base available for the base diff" "2222222222222222222222222222222222222222" "$(printf '%s' "$out1" | jq -r .base)"
 assert_eq "case1: nothing was posted" "" "$(grep 'pr comment' "$GH_LOG" || true)"
 
 # --- Case 2: no prior marker at all ---
@@ -134,6 +134,12 @@ new_fixture
 jq -nc '{comments: [{body: "<!-- review-pr:v1 not-json -->", viewerDidAuthor: true}]}' > "$COMMENTS_FILE"
 run_resolve 5 6 prevfp >/dev/null 2>&1
 assert_eq "case6: exits 5 on a malformed own marker" 5 "$?"
+
+# --- Case 6b: matching marker without usable snapshot commits is rejected ---
+new_fixture
+jq -nc '{comments: [{body: ("<!-- review-pr:v1 " + ({fingerprint:"prevfp", issue:6, pr:5, verdict:"PASS"} | tojson) + " -->"), viewerDidAuthor:true}]}' > "$COMMENTS_FILE"
+run_resolve 5 6 prevfp >/dev/null 2>&1
+assert_eq "case6b: exits 5 when prior head/base are missing" 5 "$?"
 
 # --- Case 7: argument validation ---
 new_fixture

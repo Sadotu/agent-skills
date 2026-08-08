@@ -145,7 +145,7 @@ rtm_marker() {
   jq -nc --arg fp "$fp" --argjson issue "$issue" --argjson pr "$pr" \
     --arg verdict "$verdict" --argjson author "$author" \
     '{body: ("Review text\n\n<!-- review-pr:v1 "
-             + ({fingerprint:$fp, issue:$issue, pr:$pr, pass:1, verdict:$verdict} | tojson)
+             + ({fingerprint:$fp, head:"1111111111111111111111111111111111111111", base:"2222222222222222222222222222222222222222", issue:$issue, pr:$pr, pass:1, verdict:$verdict} | tojson)
              + " -->"),
       viewerDidAuthor: $author}'
 }
@@ -173,6 +173,14 @@ assert_eq "resolve: rejects a marker for another PR" 1 "$?"
 resolve_trusted_review_marker "$(rtm_comments "$(rtm_marker abc123 27 34 BLOCKING)")" abc123 27 34 PASS >/dev/null 2>&1
 assert_eq "resolve: rejects a BLOCKING marker when PASS is required" 1 "$?"
 
+missing_snapshot="$(jq -nc '{body: ("<!-- review-pr:v1 " + ({fingerprint:"abc123", issue:27, pr:34, verdict:"PASS"} | tojson) + " -->"), viewerDidAuthor:true}')"
+resolve_trusted_review_marker "$(rtm_comments "$missing_snapshot")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects a matching marker missing head/base" 1 "$?"
+
+invalid_snapshot="$(jq -nc '{body: ("<!-- review-pr:v1 " + ({fingerprint:"abc123", head:"not-a-commit", base:42, issue:27, pr:34, verdict:"PASS"} | tojson) + " -->"), viewerDidAuthor:true}')"
+resolve_trusted_review_marker "$(rtm_comments "$invalid_snapshot")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects a matching marker with invalid head/base" 1 "$?"
+
 malformed='{"body":"<!-- review-pr:v1 not json -->","viewerDidAuthor":true}'
 resolve_trusted_review_marker "$(rtm_comments "$malformed")" abc123 27 34 PASS >/dev/null 2>&1
 assert_eq "resolve: rejects a malformed own marker payload" 1 "$?"
@@ -182,7 +190,7 @@ resolve_trusted_review_marker \
   abc123 27 34 PASS >/dev/null 2>&1
 assert_eq "resolve: rejects two trusted markers for the same fingerprint" 1 "$?"
 
-crlf="$(jq -nc --arg fp abc123 '{body: ("x\r\n<!-- review-pr:v1 " + ({fingerprint:$fp, issue:27, pr:34, pass:1, verdict:"PASS"} | tojson) + " -->\r"), viewerDidAuthor: true}')"
+crlf="$(jq -nc --arg fp abc123 '{body: ("x\r\n<!-- review-pr:v1 " + ({fingerprint:$fp, head:"1111111111111111111111111111111111111111", base:"2222222222222222222222222222222222222222", issue:27, pr:34, pass:1, verdict:"PASS"} | tojson) + " -->\r"), viewerDidAuthor: true}')"
 resolve_trusted_review_marker "$(rtm_comments "$crlf")" abc123 27 34 PASS >/dev/null 2>&1
 assert_eq "resolve: tolerates CRLF line endings from a web-UI edit" 0 "$?"
 
