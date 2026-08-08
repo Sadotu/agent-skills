@@ -20,3 +20,6 @@ explicit `path` in `agents.toml`.
   against a linked issue and PR: scope/description drift, overengineering,
   convention drift, integration gaps, orphaned compatibility code. Never
   edits code or changes draft/label state.
+- `address-review` — repairs blocking findings from one trusted `review-pr`
+  snapshot in an existing managed worktree, verifies and commits the repair,
+  then safely pushes the unchanged PR branch without lifecycle actions.
