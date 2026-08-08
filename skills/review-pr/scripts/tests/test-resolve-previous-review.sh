@@ -146,5 +146,21 @@ run_resolve 5 6 >/dev/null 2>"$BASE/err7b.log"
 assert_eq "case7: exits 1 on missing fingerprint" 1 "$?"
 assert_contains "case7: usage message" "$BASE/err7b.log" "usage:"
 
+# --- Case 8: an internal tooling failure (jq missing/broken) must not be
+# misreported as an untrusted marker — the caller needs to tell "no prior
+# PASS, run a full review" apart from "this environment is broken" ---
+new_fixture
+write_comments "$(marker_comment prevfp 6 5 PASS)"
+cat > "$STUBBIN/jq" <<'SHIM'
+#!/usr/bin/env bash
+echo "jq: simulated failure" >&2
+exit 1
+SHIM
+chmod +x "$STUBBIN/jq"
+run_resolve 5 6 prevfp >"$BASE/out8.log" 2>"$BASE/err8.log"
+rc8=$?
+assert_eq "case8: exit status is not 5 when jq is broken" 1 "$([ "$rc8" -ne 5 ] && echo 1 || echo 0)"
+assert_eq "case8: stderr does not claim UNTRUSTED" "" "$(grep -F 'UNTRUSTED' "$BASE/err8.log" || true)"
+
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

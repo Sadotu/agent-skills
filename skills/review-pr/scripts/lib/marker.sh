@@ -58,7 +58,11 @@ marker_own_fingerprints() {
 # exactly ONE marker authored by the reviewing identity (viewerDidAuthor)
 # matches <fingerprint> AND names <issue>/<pr> AND carries
 # <required-verdict>, then prints that marker's payload as one line of
-# JSON. Returns 1 with a reason on stderr otherwise.
+# JSON. Returns 1 with a reason on stderr for a deliberate refusal, or 2
+# with a reason on stderr when its own tooling fails (e.g. jq missing or
+# comments_json unreadable, or a marker body that fails to base64-decode)
+# — callers must not treat 2 the same as 1: it means "this environment is
+# broken", not "no trusted prior verdict".
 #
 # Fail-closed on purpose: a malformed own marker anywhere on the PR, or
 # two markers claiming the same fingerprint, refuses rather than picking
@@ -70,10 +74,20 @@ resolve_trusted_review_marker() {
   local comments_json="$1" want_fp="$2" want_issue="$3" want_pr="$4" want_verdict="$5"
   local encoded body clean tag_count payloads payload_count payload
   local found="" saw_fingerprint=0
+  local encoded_bodies
+
+  encoded_bodies="$(printf '%s' "$comments_json" \
+    | jq -r '.comments[] | select(.viewerDidAuthor == true) | .body | @base64')" || {
+    echo "internal error: failed to read PR comments as JSON (is jq available and working?)" >&2
+    return 2
+  }
 
   while IFS= read -r encoded; do
     [ -n "$encoded" ] || continue
-    body="$(printf '%s' "$encoded" | base64 -d)"
+    if ! body="$(printf '%s' "$encoded" | base64 -d)"; then
+      echo "internal error: failed to base64-decode a marker comment body" >&2
+      return 2
+    fi
     clean="$(printf '%s' "$body" | tr -d '\r')"
     tag_count="$(printf '%s\n' "$clean" | { grep -oF "<!-- $MARKER_TAG_REVIEW " || true; } | wc -l)"
     [ "$tag_count" -gt 0 ] || continue
@@ -106,7 +120,7 @@ resolve_trusted_review_marker() {
       fi
       found="$payload"
     done <<< "$payloads"
-  done < <(printf '%s' "$comments_json" | jq -r '.comments[] | select(.viewerDidAuthor == true) | .body | @base64')
+  done <<< "$encoded_bodies"
 
   if [ -z "$found" ]; then
     if [ "$saw_fingerprint" -eq 1 ]; then

@@ -186,5 +186,12 @@ crlf="$(jq -nc --arg fp abc123 '{body: ("x\r\n<!-- review-pr:v1 " + ({fingerprin
 resolve_trusted_review_marker "$(rtm_comments "$crlf")" abc123 27 34 PASS >/dev/null 2>&1
 assert_eq "resolve: tolerates CRLF line endings from a web-UI edit" 0 "$?"
 
+# --- resolve_trusted_review_marker: an internal tooling failure (here,
+# comments JSON that jq can't even parse) must return 2, distinct from a
+# deliberate refusal (1) — a caller needs to tell "no trusted prior PASS"
+# apart from "this environment is broken" ---
+resolve_trusted_review_marker "not valid json at all" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: returns 2 (internal error), not 1, when comments JSON is unreadable" 2 "$?"
+
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
