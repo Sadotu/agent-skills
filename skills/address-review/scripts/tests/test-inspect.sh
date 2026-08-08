@@ -110,9 +110,13 @@ CASE_WORKTREES="$DEFAULT_WORKTREES"$'worktree /tmp/duplicate\nHEAD deadbeef\nbra
 
 CASE_COMMENTS="$(jq -nc --arg body "$GOOD_BODY" '[{viewerDidAuthor:false,body:$body}]')"; reject_case foreign "trusted review marker"
 CASE_COMMENTS='[{"viewerDidAuthor":true,"body":"<!-- review-pr:v1 {broken} -->"}]'; reject_case malformed "well-formed"
+CASE_COMMENTS="$(jq -nc --arg good "$GOOD_BODY" '[{viewerDidAuthor:true,body:$good},{viewerDidAuthor:true,body:"<!-- review-pr:v1 {broken -->"}]')"; reject_case malformed-coexists "well-formed"
 CASE_COMMENTS="$(jq -nc --arg fp "$FP" '[{viewerDidAuthor:true,body:("<!-- review-pr:v1 " + ({issue:26,pr:44,fingerprint:$fp,verdict:"PASS"}|tojson) + " -->")}]')"; reject_case pass "BLOCKING"
 CASE_COMMENTS="$(jq -nc --arg fp "$FP" '[{viewerDidAuthor:true,body:("<!-- review-pr:v1 " + ({issue:27,pr:44,fingerprint:$fp,verdict:"BLOCKING"}|tojson) + " -->")}]')"; reject_case wrong-issue "issue/pr"
 CASE_COMMENTS="$(jq -nc --arg fp "$FP" '[{viewerDidAuthor:true,body:("<!-- review-pr:v1 " + ({issue:26,pr:45,fingerprint:$fp,verdict:"BLOCKING"}|tojson) + " -->")}]')"; reject_case wrong-pr "issue/pr"
+CASE_COMMENTS="$(jq -nc --arg body "$GOOD_BODY" '[{viewerDidAuthor:true,body:$body},{viewerDidAuthor:true,body:$body}]')"; reject_case duplicate-marker "multiple trusted review markers"
+ARBITRARY="${FP%?}a"; [ "$ARBITRARY" = "$FP" ] && ARBITRARY="${FP%?}b"
+reject_case arbitrary-fingerprint "no trusted review marker" 26 44 "$ARBITRARY"
 STALE="${FP%?}0"; [ "$STALE" = "$FP" ] && STALE="${FP%?}1"
 CASE_COMMENTS="$(jq -nc --arg fp "$STALE" '[{viewerDidAuthor:true,body:("<!-- review-pr:v1 " + ({issue:26,pr:44,fingerprint:$fp,verdict:"BLOCKING"}|tojson) + " -->")}]')"; reject_case stale "stale" 26 44 "$STALE"
 

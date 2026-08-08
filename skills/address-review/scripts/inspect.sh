@@ -39,7 +39,11 @@ trusted_encoded=""; marker_json=""; saw_own_tag=0; saw_fingerprint=0
 while IFS= read -r encoded; do
   body="$(printf '%s' "$encoded" | base64 -d)"
   clean_body="$(printf '%s' "$body" | tr -d '\r')"
-  if printf '%s\n' "$clean_body" | grep -qF "<!-- $MARKER_TAG_REVIEW "; then saw_own_tag=1; fi
+  tag_count="$(printf '%s\n' "$clean_body" | { grep -oF "<!-- $MARKER_TAG_REVIEW " || true; } | wc -l)"
+  payloads="$(extract_markers "$clean_body" "$MARKER_TAG_REVIEW")"
+  payload_count="$(printf '%s\n' "$payloads" | awk 'NF { n++ } END { print n+0 }')"
+  if [ "$tag_count" -gt 0 ]; then saw_own_tag=1; fi
+  [ "$tag_count" -eq "$payload_count" ] || die "trusted review marker is not well-formed"
   while IFS= read -r payload; do
     [ -n "$payload" ] || continue
     if ! printf '%s' "$payload" | jq -e 'type == "object"' >/dev/null 2>&1; then
@@ -57,7 +61,7 @@ while IFS= read -r encoded; do
     [ -z "$trusted_encoded" ] || die "found multiple trusted review markers for fingerprint $fingerprint"
     trusted_encoded="$encoded"
     marker_json="$payload"
-  done < <(extract_markers "$clean_body" "$MARKER_TAG_REVIEW")
+  done <<< "$payloads"
 done < <(printf '%s' "$pr_json" | jq -r '.comments[] | select(.viewerDidAuthor == true) | .body | @base64')
 
 if [ -z "$trusted_encoded" ]; then
