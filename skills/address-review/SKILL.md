@@ -75,8 +75,9 @@ skills/address-review/scripts/finalize.sh \
 The finalizer revalidates numeric identifiers, exact worktree/branch identity,
 the unchanged PR head branch, successful verification evidence, a clean tracked
 tree, and at least one new descendant commit beyond the inspected head. It then
-pushes exactly `HEAD:refs/heads/<inspector-branch>`. A push failure is terminal;
-report its output and do not attempt lifecycle actions.
+pushes the validated commit object to `refs/heads/<inspector-branch>`; it does
+not resolve symbolic `HEAD` again during publication. A push failure is
+terminal; report its output and do not attempt lifecycle actions.
 
 Finish by reporting the repaired findings, commit SHA, focused and full-suite
 verification evidence, and push result. Do not mark ready, approve, merge,

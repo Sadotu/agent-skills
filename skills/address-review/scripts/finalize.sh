@@ -38,7 +38,7 @@ jq -e '.status == "success" and (.command | type == "string" and length > 0) and
 
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked worktree changes must be clean before finalization"
 
-if git push origin "HEAD:refs/heads/$branch"; then
+if git push origin "$current_head:refs/heads/$branch"; then
   echo "pushed $current_head to refs/heads/$branch for issue #$issue PR #$pr"
 else
   rc=$?

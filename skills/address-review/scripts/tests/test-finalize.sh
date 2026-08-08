@@ -51,6 +51,10 @@ cat > "$BIN/git" <<'SH'
 if [ "${1:-}" = push ]; then
   printf 'git %s\n' "$*" >> "$ACTION_LOG"
   if [ "${FAIL_PUSH:-0}" = 1 ]; then echo "simulated push rejection" >&2; exit 42; fi
+  if [ "${ADVANCE_HEAD_AT_PUSH:-0}" = 1 ]; then
+    "$REAL_GIT" commit --allow-empty -qm 'concurrent branch advance'
+    "$REAL_GIT" rev-parse HEAD > "$ADVANCED_HEAD_FILE"
+  fi
 fi
 exec "$REAL_GIT" "$@"
 SH
@@ -87,6 +91,16 @@ run_case success 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verificati
 assert_eq "success: exits zero" 0 "$CASE_RC"
 assert_eq "success: pushes repair head" "$REPAIR_HEAD" "$("$REAL_GIT" --git-dir="$REMOTE" rev-parse refs/heads/agent/26-repair)"
 assert_contains "success: reports pushed ref" "$BASE/success.out" "agent/26-repair"
+
+write_evidence success
+ADVANCE_HEAD_AT_PUSH=1 ADVANCED_HEAD_FILE="$BASE/advanced-head" \
+  run_case concurrent-movement 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+ADVANCED_HEAD="$(cat "$BASE/advanced-head")"
+assert_eq "concurrent movement: exits zero after publishing validated object" 0 "$CASE_RC"
+assert_eq "concurrent movement: publishes validated object" "$REPAIR_HEAD" "$("$REAL_GIT" --git-dir="$REMOTE" rev-parse refs/heads/agent/26-repair)"
+if [ "$ADVANCED_HEAD" != "$REPAIR_HEAD" ]; then ok "concurrent movement: test advanced branch"; else fail "concurrent movement: test did not advance branch"; fi
+assert_contains "concurrent movement: reports published object" "$BASE/concurrent-movement.out" "$REPAIR_HEAD"
+"$REAL_GIT" -C "$WT" reset -q --hard "$REPAIR_HEAD"
 
 write_evidence failure
 run_case verification-failure 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
