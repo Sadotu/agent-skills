@@ -30,30 +30,41 @@ verdict="$4"
 body_file="$5"
 shift 5
 
+# mode_seen/previous_fingerprint_seen track whether the flag was passed at
+# all, distinct from whether its value ended up non-empty. This matters for
+# fail-closed validation: `--mode ""` must be a usage error, not silently
+# fall through to a full review just because $mode is empty (the same
+# state as "flag never passed").
 mode=""
 previous_fingerprint=""
+mode_seen=0
+previous_fingerprint_seen=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --mode)
       [ "$#" -ge 2 ] || { echo "--mode requires a value (only 'integration' is valid)" >&2; exit 1; }
-      mode="$2"; shift 2 ;;
+      mode="$2"; mode_seen=1; shift 2 ;;
     --previous-fingerprint)
       [ "$#" -ge 2 ] || { echo "--previous-fingerprint requires a value" >&2; exit 1; }
-      previous_fingerprint="$2"; shift 2 ;;
+      previous_fingerprint="$2"; previous_fingerprint_seen=1; shift 2 ;;
     *)
       echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 
-if [ -n "$mode" ] && [ "$mode" != integration ]; then
+if [ "$mode_seen" -eq 1 ] && [ "$mode" != integration ]; then
   echo "invalid mode: $mode (only 'integration' is valid; omit --mode for a full review)" >&2
   exit 1
 fi
-if [ -n "$mode" ] && [ -z "$previous_fingerprint" ]; then
+if [ "$previous_fingerprint_seen" -eq 1 ] && [ -z "$previous_fingerprint" ]; then
+  echo "invalid --previous-fingerprint: must not be empty" >&2
+  exit 1
+fi
+if [ "$mode_seen" -eq 1 ] && [ "$previous_fingerprint_seen" -eq 0 ]; then
   echo "--mode integration requires --previous-fingerprint <fingerprint>" >&2
   exit 1
 fi
-if [ -z "$mode" ] && [ -n "$previous_fingerprint" ]; then
+if [ "$mode_seen" -eq 0 ] && [ "$previous_fingerprint_seen" -eq 1 ]; then
   echo "--previous-fingerprint requires --mode integration" >&2
   exit 1
 fi
@@ -105,7 +116,7 @@ if [ -n "$mode" ]; then
     exit 5
   elif [ "$rc" -ne 0 ]; then
     echo "ERROR: resolve_trusted_review_marker failed internally (exit $rc) — this is a script/environment error, not an untrusted marker" >&2
-    exit "$rc"
+    exit 1
   fi
 fi
 

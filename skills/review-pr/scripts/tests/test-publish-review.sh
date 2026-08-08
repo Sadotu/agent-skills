@@ -328,8 +328,12 @@ assert_eq "case10: pass number counts the prior marker" 2 "$(printf '%s' "$out10
 assert_contains "case10: body identifies integration mode" "$POSTED_BODY_FILE" "Integration review"
 assert_contains "case10: body names previous head" "$POSTED_BODY_FILE" "prevhead"
 assert_contains "case10: body names previous base" "$POSTED_BODY_FILE" "prevbase"
-assert_contains "case10: body names current head" "$POSTED_BODY_FILE" "deadbeef"
-assert_contains "case10: body names current base" "$POSTED_BODY_FILE" "cafef00d"
+# Anchored to the "Current snapshot" header bullet itself, not a bare SHA —
+# a bare "deadbeef"/"cafef00d" check would pass even with the header
+# deleted entirely, since the trailing review-pr:v1 marker line also
+# embeds head/base in every posted comment (full or integration).
+assert_contains "case10: body names current head" "$POSTED_BODY_FILE" "- Current snapshot: head \`deadbeef\`,"
+assert_contains "case10: body names current base" "$POSTED_BODY_FILE" "\`deadbeef\`, base \`cafef00d\`"
 assert_contains "case10: body keeps the review text" "$POSTED_BODY_FILE" "Review findings go here."
 
 # --- Case 11: integration BLOCKING uses the same verdict contract ---
@@ -393,6 +397,20 @@ assert_eq "case15: stale current snapshot -> exit 3" 3 "$?"
 assert_contains "case15: STALE reported on stderr" "$BASE/err15.log" "STALE"
 assert_eq "case15: nothing posted while stale" "" "$(grep 'pr comment' "$GH_LOG" || true)"
 
+# --- Case 15b: stale AND no trusted prior marker -> still exits 3, not 5.
+# This pins the check order: if resolution ran before staleness, the
+# missing/untrusted "prevfp" marker below would make this exit 5 instead.
+# (Case 15 above can't prove the order because its prior marker resolves
+# fine either way.) ---
+new_fixture
+common_stubs
+# Deliberately no write_comments call: comments.json stays "{"comments":[]}"
+# from new_fixture, so --previous-fingerprint prevfp has nothing to resolve.
+run_publish_integration 5 6 "not-the-real-fingerprint" PASS prevfp >/dev/null 2>"$BASE/err15b.log"
+assert_eq "case15b: stale beats unresolvable prior marker -> exit 3, not 5" 3 "$?"
+assert_contains "case15b: STALE reported on stderr" "$BASE/err15b.log" "STALE"
+assert_eq "case15b: nothing posted while stale" "" "$(grep 'pr comment' "$GH_LOG" || true)"
+
 # --- Case 16: duplicate current snapshot stays idempotent ---
 new_fixture
 common_stubs
@@ -402,6 +420,22 @@ run_publish_integration 5 6 "$fp16" PASS prevfp >/dev/null 2>"$BASE/err16.log"
 assert_eq "case16: already-reviewed current snapshot -> exit 4" 4 "$?"
 assert_contains "case16: DUPLICATE reported on stderr" "$BASE/err16.log" "DUPLICATE"
 assert_eq "case16: nothing posted on duplicate" "" "$(grep 'pr comment' "$GH_LOG" || true)"
+
+# --- Case 16b: duplicate current snapshot AND unresolvable prior marker ->
+# exit 5, not 4. This pins the check order: if duplicate detection ran
+# before resolution, the already-published current fingerprint below would
+# make this exit 4 instead. (Case 16 above can't prove the order because
+# its prior marker resolves fine either way.) ---
+new_fixture
+common_stubs
+fp16b="$(run_snapshot 5 6)"
+# Only the current-fingerprint duplicate marker is present; no trusted
+# "prevfp" marker exists for --previous-fingerprint to resolve.
+write_comments "$(marker_comment "$fp16b" 2 PASS)"
+run_publish_integration 5 6 "$fp16b" PASS prevfp >/dev/null 2>"$BASE/err16b.log"
+assert_eq "case16b: resolution beats duplicate -> exit 5, not 4" 5 "$?"
+assert_contains "case16b: UNTRUSTED reported on stderr" "$BASE/err16b.log" "UNTRUSTED"
+assert_eq "case16b: nothing posted" "" "$(grep 'pr comment' "$GH_LOG" || true)"
 
 # --- Case 17: the flags are a required pair ---
 new_fixture
@@ -435,6 +469,35 @@ PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
   "$PUBLISH" 5 6 "$fp17c" PASS "$BODY_FILE" --mode full --previous-fingerprint prevfp >/dev/null 2>"$BASE/err17c.log"
 assert_eq "case17: unknown --mode value -> exit 1" 1 "$?"
 assert_contains "case17: names the only valid mode" "$BASE/err17c.log" "integration"
+
+# --- Case 18: an explicitly-passed but empty --mode must fail closed, not
+# silently fall through to a full review (fp with a fresh snapshot, so a
+# full-review interpretation would otherwise succeed and post) ---
+new_fixture
+common_stubs
+fp18="$(run_snapshot 5 6)"
+PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
+  STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
+  STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
+  STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
+  "$PUBLISH" 5 6 "$fp18" PASS "$BODY_FILE" --mode "" >/dev/null 2>"$BASE/err18.log"
+assert_eq "case18: --mode \"\" -> exit 1, not a silent full review" 1 "$?"
+assert_contains "case18: clear error message" "$BASE/err18.log" "invalid mode"
+assert_eq "case18: nothing posted" "" "$(grep 'pr comment' "$GH_LOG" || true)"
+
+# --- Case 19: an explicitly-passed but empty --previous-fingerprint must
+# also fail closed, not resolve against an empty-string fingerprint ---
+new_fixture
+common_stubs
+fp19="$(run_snapshot 5 6)"
+PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
+  STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
+  STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
+  STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
+  "$PUBLISH" 5 6 "$fp19" PASS "$BODY_FILE" --mode integration --previous-fingerprint "" >/dev/null 2>"$BASE/err19.log"
+assert_eq "case19: --previous-fingerprint \"\" -> exit 1" 1 "$?"
+assert_contains "case19: clear error message" "$BASE/err19.log" "invalid --previous-fingerprint"
+assert_eq "case19: nothing posted" "" "$(grep 'pr comment' "$GH_LOG" || true)"
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

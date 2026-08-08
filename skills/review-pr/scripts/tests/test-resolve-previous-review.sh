@@ -159,8 +159,9 @@ SHIM
 chmod +x "$STUBBIN/jq"
 run_resolve 5 6 prevfp >"$BASE/out8.log" 2>"$BASE/err8.log"
 rc8=$?
-assert_eq "case8: exit status is not 5 when jq is broken" 1 "$([ "$rc8" -ne 5 ] && echo 1 || echo 0)"
+assert_eq "case8: exits 1 (genuine script error) when jq is broken" 1 "$rc8"
 assert_eq "case8: stderr does not claim UNTRUSTED" "" "$(grep -F 'UNTRUSTED' "$BASE/err8.log" || true)"
+assert_contains "case8: stderr reports the internal-error reason" "$BASE/err8.log" "failed internally"
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
