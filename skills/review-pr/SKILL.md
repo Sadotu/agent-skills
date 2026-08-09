@@ -83,7 +83,7 @@ primary worktree, never a branch checkout, so nothing can accidentally get
 committed:
 
 ```bash
-GIT_AUTH fetch origin
+GIT_AUTH fetch origin '+refs/heads/*:refs/remotes/origin/*'
 tmp_review_dir="$(mktemp -d)"
 git worktree add --detach "$tmp_review_dir" <head-sha>
 ```

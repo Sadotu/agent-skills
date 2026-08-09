@@ -29,7 +29,7 @@ branch="agent/${issue_number}-${slug}"
 # --- Guards: primary worktree must be clean, on main, and not diverged ---
 test "$(git branch --show-current)" = main
 test -z "$(git status --porcelain)"
-GIT_AUTH fetch origin
+GIT_AUTH fetch origin '+refs/heads/*:refs/remotes/origin/*'
 git merge-base --is-ancestor main origin/main
 git merge --ff-only origin/main
 test "$(git rev-parse main)" = "$(git rev-parse origin/main)"
@@ -40,7 +40,10 @@ git worktree add -b "$branch" "$worktree_path" "$base_ref"
 # --- Open the PR now, as a draft: seed a commit, push, open immediately ---
 cd "$worktree_path"
 git commit --allow-empty -m "Start work on #${issue_number}"
-GIT_AUTH push -u origin "$branch"
+GIT_AUTH push origin "$branch:refs/heads/$branch"
+git update-ref "refs/remotes/origin/$branch" "$branch"
+git config "branch.$branch.remote" origin
+git config "branch.$branch.merge" "refs/heads/$branch"
 GH pr create --draft \
   --title "$pr_title" \
   --body "$(cat <<EOF

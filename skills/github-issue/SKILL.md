@@ -200,7 +200,7 @@ Report production, test, and documentation line counts separately.
 **Before pushing, guard against a stale base** — a branch that has fallen behind `origin/main` produces a bloated, dangerous PR diff:
 
 ```bash
-GIT_AUTH fetch origin
+GIT_AUTH fetch origin '+refs/heads/*:refs/remotes/origin/*'
 base=$(git merge-base origin/main HEAD)
 behind=$(git rev-list --count "$base"..origin/main)
 [ "$behind" -gt 50 ] && echo "STALE BASE: $behind commits behind origin/main — rebase before PR"

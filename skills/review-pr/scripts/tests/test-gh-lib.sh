@@ -46,6 +46,8 @@ REPO_DIR="$BASE/repo"; STUBBIN="$BASE/bin"
 GH_LOG="$BASE/gh.log"; TOKEN_SINK="$BASE/token-sink"; HELPER_LOG="$BASE/helper.log"
 GIT_LOG="$BASE/git.log"; GIT_TOKEN_SINK="$BASE/git-token-sink"
 GIT_PROTOCOL_SINK="$BASE/git-protocol-sink"
+CANONICAL_CREDENTIAL_SINK="$BASE/canonical-credential-sink"
+FOREIGN_CREDENTIAL_SINK="$BASE/foreign-credential-sink"
 mkdir -p "$REPO_DIR" "$STUBBIN"
 "$REAL_GIT" -C "$REPO_DIR" init -q
 "$REAL_GIT" -C "$REPO_DIR" remote add origin https://github.com/test/repo.git
@@ -82,6 +84,15 @@ esac
 printf '%s\n' "$*" >> "$GIT_LOG"
 printf '%s' "${GIT_APP_TOKEN-}" > "$GIT_TOKEN_SINK"
 printf '%s' "${GIT_ALLOW_PROTOCOL-}" > "$GIT_PROTOCOL_SINK"
+if [ "${PROBE_CREDENTIALS:-0}" = 1 ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      credential.helper=!*) helper="${arg#credential.helper=!}" ;;
+    esac
+  done
+  printf 'protocol=https\nhost=github.com\npath=test/repo.git\n\n' | bash -c "$helper \"\$@\"" _ get > "$CANONICAL_CREDENTIAL_SINK"
+  printf 'protocol=https\nhost=github.com\npath=other/repo.git\n\n' | bash -c "$helper \"\$@\"" _ get > "$FOREIGN_CREDENTIAL_SINK"
+fi
 SH
 chmod +x "$STUBBIN/git"
 
@@ -133,6 +144,7 @@ assert_token "helper mode api: gh receives the minted token" "$SENTINEL" "$TOKEN
 (
   cd "$REPO_DIR" || exit 1
   PATH="$STUBBIN:$PATH" REAL_GIT="$REAL_GIT" GIT_LOG="$GIT_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" GIT_PROTOCOL_SINK="$GIT_PROTOCOL_SINK" \
+    PROBE_CREDENTIALS=1 CANONICAL_CREDENTIAL_SINK="$CANONICAL_CREDENTIAL_SINK" FOREIGN_CREDENTIAL_SINK="$FOREIGN_CREDENTIAL_SINK" \
     HELPER_LOG="$HELPER_LOG" SENTINEL_TOKEN="$SENTINEL" GH_APP_TOKEN_HELPER="$BASE/gh-app-token.sh" \
     bash -c 'source "$1" || exit 1; GIT_AUTH fetch origin' _ "$LIB"
 ) >"$BASE/git-out" 2>"$BASE/git-err"
@@ -142,9 +154,12 @@ assert_token "git auth: git receives App token through scoped environment" "$SEN
 assert_contains "git auth: ambient credential helpers cleared" "$GIT_LOG" "credential.helper="
 assert_contains "git auth: ambient HTTP authorization headers cleared" "$GIT_LOG" "http.extraHeader="
 assert_contains "git auth: scoped App credential helper installed" "$GIT_LOG" "x-access-token"
-assert_contains "git auth: forces GitHub HTTPS fetch URL" "$GIT_LOG" "remote.origin.url=https://github.com/test/repo.git"
-assert_contains "git auth: forces GitHub HTTPS push URL" "$GIT_LOG" "remote.origin.pushurl=https://github.com/test/repo.git"
+assert_contains "git auth: rewrites origin argument to canonical HTTPS" "$GIT_LOG" "fetch https://github.com/test/repo.git"
+assert_not_contains "git auth: does not rely on remote config overrides" "$GIT_LOG" "remote.origin.url="
 assert_eq "git auth: permits only HTTPS transport" "https" "$(cat "$GIT_PROTOCOL_SINK")"
+assert_contains "git auth: canonical credential includes username" "$CANONICAL_CREDENTIAL_SINK" "username=x-access-token"
+assert_contains "git auth: canonical credential includes token" "$CANONICAL_CREDENTIAL_SINK" "password=$SENTINEL"
+assert_eq "git auth: refuses credentials for foreign HTTPS path" "" "$(cat "$FOREIGN_CREDENTIAL_SINK")"
 assert_not_contains "git auth: token absent from argv log" "$GIT_LOG" "$SENTINEL"
 assert_not_contains "git auth: token absent from stdout" "$BASE/git-out" "$SENTINEL"
 assert_not_contains "git auth: token absent from stderr" "$BASE/git-err" "$SENTINEL"
@@ -180,8 +195,8 @@ set_origin git@github.com:acme/widget.js.git
     GIT_PROTOCOL_SINK="$GIT_PROTOCOL_SINK" HELPER_LOG="$HELPER_LOG" SENTINEL_TOKEN="$SENTINEL" \
     GH_APP_TOKEN_HELPER="$BASE/gh-app-token.sh" bash -c 'source "$1" || exit 1; GIT_AUTH push -u origin main' _ "$LIB"
 ) >/dev/null 2>"$BASE/ssh-route-err"
-assert_contains "git auth: SCP origin cannot select SSH fetch route" "$GIT_LOG" "remote.origin.url=https://github.com/acme/widget.js.git"
-assert_contains "git auth: configured pushurl cannot select SSH identity" "$GIT_LOG" "remote.origin.pushurl=https://github.com/acme/widget.js.git"
+assert_contains "git auth: SCP origin and pushurl cannot select SSH route" "$GIT_LOG" "push -u https://github.com/acme/widget.js.git main"
+assert_not_contains "git auth: malicious configured pushurl absent from invocation" "$GIT_LOG" "attacker/other"
 set_origin https://github.com/test/repo.git
 "$REAL_GIT" -C "$REPO_DIR" config --unset-all remote.origin.pushurl || true
 

@@ -65,11 +65,15 @@ GH() {
 
 # Run a network Git operation with only freshly minted App credentials.
 GIT_AUTH() {
-  local token credential_helper remote_url
+  local token credential_helper remote_url arg
+  local -a git_args=()
   token="$(_mint_app_token)" || return $?
   remote_url="https://github.com/$REPO.git"
-  credential_helper='!f() { if [ "$1" = get ]; then printf "%s\n" "username=x-access-token" "password=$GIT_APP_TOKEN"; fi; }; f'
+  for arg in "$@"; do
+    if [ "$arg" = origin ]; then git_args+=("$remote_url"); else git_args+=("$arg"); fi
+  done
+  credential_helper='!f() { [ "$1" = get ] || exit 0; protocol= host= path=; while IFS="=" read -r key value; do case "$key" in protocol) protocol="$value";; host) host="$value";; path) path="$value";; esac; done; if [ "$protocol" = https ] && [ "$host" = github.com ] && [ "$path" = "$GIT_APP_REPO.git" ]; then printf "%s\n" "username=x-access-token" "password=$GIT_APP_TOKEN"; fi; }; f'
   GIT_APP_TOKEN="$token" GIT_ALLOW_PROTOCOL=https GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= \
-    git -c credential.helper= -c "credential.helper=$credential_helper" -c http.extraHeader= \
-      -c "remote.origin.url=$remote_url" -c "remote.origin.pushurl=$remote_url" "$@"
+    GIT_APP_REPO="$REPO" git -c credential.helper= -c "credential.helper=$credential_helper" \
+      -c credential.useHttpPath=true -c http.extraHeader= "${git_args[@]}"
 }

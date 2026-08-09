@@ -133,8 +133,7 @@ done
 rewritten=()
 for arg in "$@"; do
   case "$arg" in
-    remote.origin.url=https://github.com/*|remote.origin.pushurl=https://github.com/*)
-      rewritten+=("${arg%%=*}=$TEST_REMOTE_URL") ;;
+    https://github.com/testowner/testrepo.git) rewritten+=("$TEST_REMOTE_URL") ;;
     *) rewritten+=("$arg") ;;
   esac
 done
@@ -243,6 +242,9 @@ test_case4_happy_path() {
     "$(git -C "$wt" log -1 --format=%s)"
   assert_true "case4: branch pushed to fake origin" \
     bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/agent/7-my-cool-slug"
+  assert_eq "case4: local upstream metadata preserves named-origin semantics" \
+    "origin/agent/7-my-cool-slug" \
+    "$(git -C "$wt" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}')"
   assert_true "case4: gh pr create was invoked" \
     bash -c "grep -q 'pr create' '$GH_LOG'"
   assert_true "case4: network git receives App tokens" \

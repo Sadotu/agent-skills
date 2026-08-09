@@ -100,8 +100,7 @@ fi
 rewritten=()
 for arg in "$@"; do
   case "$arg" in
-    remote.origin.url=https://github.com/*|remote.origin.pushurl=https://github.com/*)
-      rewritten+=("${arg%%=*}=$TEST_REMOTE_URL") ;;
+    https://github.com/test/repo.git) rewritten+=("$TEST_REMOTE_URL") ;;
     *) rewritten+=("$arg") ;;
   esac
 done
