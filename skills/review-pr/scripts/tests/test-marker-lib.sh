@@ -133,5 +133,73 @@ expected_multi_own='fp-a
 fp-b'
 assert_eq "marker_own_fingerprints returns all own markers in order" "$expected_multi_own" "$multi_out"
 
+# --- resolve_trusted_review_marker ---
+
+# rtm_comments <comment-json...> — builds {"comments":[...]}.
+rtm_comments() { jq -nc --argjson c "[$(IFS=,; echo "$*")]" '{comments: $c}'; }
+
+# rtm_marker <fp> <issue> <pr> <verdict> [viewerDidAuthor] — one own comment
+# carrying a well-formed review-pr:v1 marker.
+rtm_marker() {
+  local fp="$1" issue="$2" pr="$3" verdict="$4" author="${5:-true}"
+  jq -nc --arg fp "$fp" --argjson issue "$issue" --argjson pr "$pr" \
+    --arg verdict "$verdict" --argjson author "$author" \
+    '{body: ("Review text\n\n<!-- review-pr:v1 "
+             + ({fingerprint:$fp, head:"1111111111111111111111111111111111111111", base:"2222222222222222222222222222222222222222", issue:$issue, pr:$pr, pass:1, verdict:$verdict} | tojson)
+             + " -->"),
+      viewerDidAuthor: $author}'
+}
+
+out="$(resolve_trusted_review_marker "$(rtm_comments "$(rtm_marker abc123 27 34 PASS)")" abc123 27 34 PASS)"
+assert_eq "resolve: exits 0 on a valid trusted marker" 0 "$?"
+assert_eq "resolve: prints the matching payload" "abc123" "$(printf '%s' "$out" | jq -r .fingerprint)"
+assert_eq "resolve: payload carries prior verdict" "PASS" "$(printf '%s' "$out" | jq -r .verdict)"
+
+resolve_trusted_review_marker "$(rtm_comments)" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects when no markers exist" 1 "$?"
+
+resolve_trusted_review_marker "$(rtm_comments "$(rtm_marker abc123 27 34 PASS false)")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects a foreign-authored marker" 1 "$?"
+
+resolve_trusted_review_marker "$(rtm_comments "$(rtm_marker other 27 34 PASS)")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects a marker for another fingerprint" 1 "$?"
+
+resolve_trusted_review_marker "$(rtm_comments "$(rtm_marker abc123 99 34 PASS)")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects a marker for another issue" 1 "$?"
+
+resolve_trusted_review_marker "$(rtm_comments "$(rtm_marker abc123 27 99 PASS)")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects a marker for another PR" 1 "$?"
+
+resolve_trusted_review_marker "$(rtm_comments "$(rtm_marker abc123 27 34 BLOCKING)")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects a BLOCKING marker when PASS is required" 1 "$?"
+
+missing_snapshot="$(jq -nc '{body: ("<!-- review-pr:v1 " + ({fingerprint:"abc123", issue:27, pr:34, verdict:"PASS"} | tojson) + " -->"), viewerDidAuthor:true}')"
+resolve_trusted_review_marker "$(rtm_comments "$missing_snapshot")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects a matching marker missing head/base" 1 "$?"
+
+invalid_snapshot="$(jq -nc '{body: ("<!-- review-pr:v1 " + ({fingerprint:"abc123", head:"not-a-commit", base:42, issue:27, pr:34, verdict:"PASS"} | tojson) + " -->"), viewerDidAuthor:true}')"
+resolve_trusted_review_marker "$(rtm_comments "$invalid_snapshot")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects a matching marker with invalid head/base" 1 "$?"
+
+malformed='{"body":"<!-- review-pr:v1 not json -->","viewerDidAuthor":true}'
+resolve_trusted_review_marker "$(rtm_comments "$malformed")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects a malformed own marker payload" 1 "$?"
+
+resolve_trusted_review_marker \
+  "$(rtm_comments "$(rtm_marker abc123 27 34 PASS)" "$(rtm_marker abc123 27 34 PASS)")" \
+  abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: rejects two trusted markers for the same fingerprint" 1 "$?"
+
+crlf="$(jq -nc --arg fp abc123 '{body: ("x\r\n<!-- review-pr:v1 " + ({fingerprint:$fp, head:"1111111111111111111111111111111111111111", base:"2222222222222222222222222222222222222222", issue:27, pr:34, pass:1, verdict:"PASS"} | tojson) + " -->\r"), viewerDidAuthor: true}')"
+resolve_trusted_review_marker "$(rtm_comments "$crlf")" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: tolerates CRLF line endings from a web-UI edit" 0 "$?"
+
+# --- resolve_trusted_review_marker: an internal tooling failure (here,
+# comments JSON that jq can't even parse) must return 2, distinct from a
+# deliberate refusal (1) — a caller needs to tell "no trusted prior PASS"
+# apart from "this environment is broken" ---
+resolve_trusted_review_marker "not valid json at all" abc123 27 34 PASS >/dev/null 2>&1
+assert_eq "resolve: returns 2 (internal error), not 1, when comments JSON is unreadable" 2 "$?"
+
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
