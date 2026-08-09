@@ -40,7 +40,8 @@ mkdir -p "$REPO" "$BIN"
 "$REAL_GIT" -C "$REPO" config user.name Test
 "$REAL_GIT" -C "$REPO" commit --allow-empty -qm init
 "$REAL_GIT" -C "$REPO" branch -M main
-"$REAL_GIT" -C "$REPO" remote add origin "$REMOTE"
+"$REAL_GIT" -C "$REPO" remote add origin https://github.com/test/repo.git
+"$REAL_GIT" -C "$REPO" remote set-url --push origin "$REMOTE"
 "$REAL_GIT" -C "$REPO" worktree add -qb agent/26-repair "$WT"
 INSPECTED_HEAD="$("$REAL_GIT" -C "$WT" rev-parse HEAD)"
 printf 'repair\n' > "$WT/change.txt"
@@ -99,8 +100,8 @@ write_evidence() {
 }
 
 # Cases default to the devcontainer environment: the App-token helper is
-# present and the host has no `gh auth login`. CASE_HELPER/CASE_LOGGED_IN swap
-# that for an ordinary machine. The helper path is always set, so a test run
+# present and the host has no `gh auth login`. CASE_HELPER/CASE_LOGGED_IN can
+# simulate a missing helper and a logged-in user. The helper path is always set, so a test run
 # never reaches the real /opt helper or mints a real token.
 run_case() {
   local name="$1"; shift
@@ -140,22 +141,29 @@ assert_not_contains "success: token absent from stdout" "$BASE/success.out" "$SE
 assert_not_contains "success: token absent from stderr" "$BASE/success.err" "$SENTINEL"
 assert_not_contains "success: token absent from action log" "$LOG" "$SENTINEL"
 
-# --- success on an ordinary machine: no App helper, caller's own gh login ---
+# --- missing App helper fails closed even when the stub gh is logged in ---
 "$REAL_GIT" --git-dir="$REMOTE" update-ref -d refs/heads/agent/26-repair
 write_evidence success
 CASE_HELPER="$BASE/absent-helper.sh" CASE_LOGGED_IN=1 \
-  run_case local-auth 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
-assert_eq "local auth: exits zero" 0 "$CASE_RC"
-assert_eq "local auth: pushes repair head" "$REPAIR_HEAD" "$("$REAL_GIT" --git-dir="$REMOTE" rev-parse refs/heads/agent/26-repair)"
-assert_token "local auth: no token injected" "" "$TOKEN_SINK"
-assert_eq "local auth: helper never invoked" "" "$(cat "$HELPER_LOG")"
+  run_case missing-helper-logged-in 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+assert_eq "missing helper logged in: exits nonzero" 1 "$CASE_RC"
+assert_contains "missing helper logged in: directs user to setup" "$BASE/missing-helper-logged-in.err" "/setup"
+assert_eq "missing helper logged in: gh never invoked" "" "$(cat "$LOG")"
+assert_token "missing helper logged in: no token injected" "" "$TOKEN_SINK"
+assert_eq "missing helper logged in: helper never invoked" "" "$(cat "$HELPER_LOG")"
+if "$REAL_GIT" --git-dir="$REMOTE" show-ref --verify --quiet refs/heads/agent/26-repair; then
+  fail "missing helper logged in: no push"
+else
+  ok "missing helper logged in: no push"
+fi
 
 # --- neither credential available: fail loudly, never push a half-guarded repair ---
 write_evidence success
 CASE_HELPER="$BASE/absent-helper.sh" CASE_LOGGED_IN=0 \
   run_case unauthenticated 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
 if [ "$CASE_RC" -ne 0 ]; then ok "unauthenticated: nonzero"; else fail "unauthenticated: nonzero"; fi
-assert_contains "unauthenticated: surfaces gh's own message" "$BASE/unauthenticated.err" "gh auth login"
+assert_contains "unauthenticated: directs user to setup" "$BASE/unauthenticated.err" "/setup"
+assert_eq "unauthenticated: gh never invoked" "" "$(cat "$LOG")"
 if grep -q '^git push ' "$LOG"; then fail "unauthenticated: no push"; else ok "unauthenticated: no push"; fi
 
 write_evidence success

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Tests for scripts/lib/gh.sh — verifies the GH() wrapper authenticates
-# correctly in both environments it adapts to: the devcontainer, where a
-# short-lived GitHub App token is minted per call, and an ordinary machine
-# where the caller's own `gh auth login` credential is used. No network.
+# correctly with a short-lived GitHub App token and fails closed when the App
+# helper is unavailable, even if `gh` has a logged-in user. No network.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -111,23 +110,20 @@ else
 fi
 assert_token "helper mode api: gh receives the minted token" "$SENTINEL" "$TOKEN_SINK"
 
-# --- Case 3: ordinary environment (own `gh auth login`, no App helper) ---
+# --- Case 3: missing App helper fails closed, even with logged-in stub gh ---
 run_lib "$BASE/absent-helper.sh" pr view 44 --json headRefName
-assert_eq "ordinary mode: exits zero" 0 "$RC"
-assert_contains "ordinary mode: appends --repo" "$GH_LOG" \
-  "pr view 44 --json headRefName --repo test/repo"
-assert_token "ordinary mode: lib sets no GH_TOKEN" "" "$TOKEN_SINK"
-assert_eq "ordinary mode: helper never invoked" "" "$(cat "$HELPER_LOG")"
+assert_eq "missing helper: exits nonzero" 1 "$RC"
+assert_contains "missing helper: directs user to setup" "$BASE/err" "/setup"
+assert_eq "missing helper: gh never invoked" "" "$(cat "$GH_LOG")"
+assert_token "missing helper: no token delivered" "" "$TOKEN_SINK"
+assert_eq "missing helper: helper never invoked" "" "$(cat "$HELPER_LOG")"
 
-# --- Case 4: ordinary environment, `api` subcommand ---
+# --- Case 4: missing App helper also blocks the `api` subcommand ---
 run_lib "$BASE/absent-helper.sh" api repos/test/repo/pulls/44
-assert_eq "ordinary mode api: exits zero" 0 "$RC"
-if grep -qF -- "--repo" "$GH_LOG"; then
-  fail "ordinary mode api: --repo not appended"
-else
-  ok "ordinary mode api: --repo not appended"
-fi
-assert_token "ordinary mode api: lib sets no GH_TOKEN" "" "$TOKEN_SINK"
+assert_eq "missing helper api: exits nonzero" 1 "$RC"
+assert_contains "missing helper api: directs user to setup" "$BASE/err" "/setup"
+assert_eq "missing helper api: gh never invoked" "" "$(cat "$GH_LOG")"
+assert_token "missing helper api: no token delivered" "" "$TOKEN_SINK"
 
 # --- Case 5: the production default path is unchanged ---
 if grep -qF '/opt/agent-devcontainer/gh-app-token.sh' "$LIB"; then
