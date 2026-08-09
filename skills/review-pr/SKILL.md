@@ -14,19 +14,13 @@ one pass.
 **Preconditions:**
 
 - **Run all phases in one shell session** so `$REPO`, `$WORKSPACE`, and the `GH` helper below persist.
-- **Authentication adapts to the environment**, same as `github-issue`: inside the agent devcontainer, `gh` uses the GitHub App; elsewhere, your own `gh auth login`.
+- **GitHub App authentication is mandatory**, same as `github-issue`. Never use the GitHub connector, a user PAT, `gh auth login`, or `gh auth setup-git`. If App authentication is unavailable, stop and run `/setup`.
 
-Setup — identical to `github-issue`'s:
+Setup — source the fail-closed App helper used by the scripts:
 
 ```bash
-REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null \
-  || git remote get-url origin | sed -E 's#.*[:/]([^/]+/[^/.]+)(\.git)?$#\1#')"
 WORKSPACE="$(git rev-parse --show-toplevel)"
-if [ -x /opt/agent-devcontainer/gh-app-token.sh ]; then
-  GH() { GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@" --repo "$REPO"; }
-else
-  GH() { gh "$@" --repo "$REPO"; }
-fi
+source "$WORKSPACE/skills/review-pr/scripts/lib/gh.sh"
 ```
 
 ---
@@ -182,11 +176,10 @@ full history (API pagination) — pass numbering/duplicate detection are
 best-effort there; documented limitation, not coded around.
 
 Note: markers are only recognized when authored by the same
-`gh`-authenticated identity running the review — deliberate (stops a PR
-commenter forging a marker to suppress/fake a review), but means a
-devcontainer (App) pass and a local human `gh auth login` pass never see
-each other's markers: pass numbering resets, no duplicate detection across
-an identity change.
+`gh`-authenticated App identity running the review — deliberate (stops a PR
+commenter forging a marker to suppress/fake a review). Changing the App
+identity resets pass numbering and duplicate detection across that identity
+change.
 
 ## Phase 7 — Cross-link affected PRs
 

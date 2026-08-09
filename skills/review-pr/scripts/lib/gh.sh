@@ -34,8 +34,8 @@ REPO="$owner/$repo"
 # be running in.
 WORKSPACE="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
 
-# Overridable only so tests can exercise both authentication environments
-# without mutating the machine; unset means the devcontainer's real helper.
+# Overridable only so tests can exercise helper success and failure without
+# mutating the machine; unset means the devcontainer's real helper.
 GH_APP_TOKEN_HELPER="${GH_APP_TOKEN_HELPER:-/opt/agent-devcontainer/gh-app-token.sh}"
 
 if [ ! -x "$GH_APP_TOKEN_HELPER" ]; then
