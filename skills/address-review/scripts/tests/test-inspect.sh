@@ -15,6 +15,9 @@ assert_eq() {
 assert_contains() {
   if grep -qF "$3" "$2"; then ok "$1"; else fail "$1 (missing [$3])"; fi
 }
+assert_not_contains() {
+  if grep -qF "$3" "$2"; then fail "$1 (unexpected [$3])"; else ok "$1"; fi
+}
 
 BASE="$(mktemp -d)"
 trap 'rm -rf "$BASE"' EXIT
@@ -25,7 +28,15 @@ mkdir -p "$REPO" "$BIN"
 "$REAL_GIT" -C "$REPO" config user.name Test
 "$REAL_GIT" -C "$REPO" commit --allow-empty -qm init
 "$REAL_GIT" -C "$REPO" branch -M main
+"$REAL_GIT" -C "$REPO" remote add origin https://github.com/test/repo.git
 "$REAL_GIT" -C "$REPO" worktree add -qb agent/26-repair "$WT"
+
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
+cat > "$BASE/gh-app-token.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$SENTINEL_TOKEN"
+SH
+chmod +x "$BASE/gh-app-token.sh"
 
 cat > "$BIN/git" <<'SH'
 #!/usr/bin/env bash
@@ -40,7 +51,10 @@ chmod +x "$BIN/git"
 cat > "$BIN/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_LOG"
-if [ "$1 $2" = "repo view" ]; then echo test/repo; exit 0; fi
+if [ "${GH_TOKEN-}" != "$SENTINEL_TOKEN" ]; then
+  echo "stub gh requires the expected App token" >&2
+  exit 4
+fi
 case "$1 $2 ${5:-${4:-}}" in
   "issue view labels,body,updatedAt")
     jq -n --arg body "$STUB_ISSUE_BODY" --arg updated "$STUB_ISSUE_UPDATED" --arg labels "$STUB_LABELS" \
@@ -68,13 +82,14 @@ DEFAULT_WORKTREES="worktree $REPO\nHEAD 0000\nbranch refs/heads/main\n\nworktree
 run_case() {
   local name="$1" issue="${2:-26}" pr="${3:-44}" fp="${4:-$FP}"
   : > "$LOG"
-  PATH="$BIN:$PATH" REAL_GIT="$REAL_GIT" GH_LOG="$LOG" \
-    STUB_LABELS="${CASE_LABELS-agent-running}" STUB_ISSUE_BODY="${CASE_ISSUE_BODY-$ISSUE_BODY}" \
-    STUB_ISSUE_UPDATED=2026-08-01T00:00:00Z STUB_PR_BODY="${CASE_PR_BODY-$PR_BODY}" \
-    STUB_PR_UPDATED=2026-08-02T00:00:00Z STUB_BRANCH="${CASE_BRANCH-agent/26-repair}" \
-    STUB_HEAD="$HEAD" STUB_BASE="$BASE_SHA" STUB_COMMENTS="${CASE_COMMENTS:-$(jq -nc --arg body "$GOOD_BODY" '[{viewerDidAuthor:true,body:$body}]')}" \
-    STUB_WORKTREES="${CASE_WORKTREES-$DEFAULT_WORKTREES}" \
-    "$INSPECT" "$issue" "$pr" "$fp" >"$BASE/$name.out" 2>"$BASE/$name.err"
+  (cd "$REPO" && PATH="$BIN:$PATH" REAL_GIT="$REAL_GIT" GH_LOG="$LOG" \
+      GH_APP_TOKEN_HELPER="$BASE/gh-app-token.sh" SENTINEL_TOKEN="$SENTINEL" \
+      STUB_LABELS="${CASE_LABELS-agent-running}" STUB_ISSUE_BODY="${CASE_ISSUE_BODY-$ISSUE_BODY}" \
+      STUB_ISSUE_UPDATED=2026-08-01T00:00:00Z STUB_PR_BODY="${CASE_PR_BODY-$PR_BODY}" \
+      STUB_PR_UPDATED=2026-08-02T00:00:00Z STUB_BRANCH="${CASE_BRANCH-agent/26-repair}" \
+      STUB_HEAD="$HEAD" STUB_BASE="$BASE_SHA" STUB_COMMENTS="${CASE_COMMENTS:-$(jq -nc --arg body "$GOOD_BODY" '[{viewerDidAuthor:true,body:$body}]')}" \
+      STUB_WORKTREES="${CASE_WORKTREES-$DEFAULT_WORKTREES}" \
+      "$INSPECT" "$issue" "$pr" "$fp") >"$BASE/$name.out" 2>"$BASE/$name.err"
   CASE_RC=$?
 }
 reset_case() { unset CASE_LABELS CASE_ISSUE_BODY CASE_PR_BODY CASE_BRANCH CASE_COMMENTS CASE_WORKTREES; }
@@ -99,6 +114,9 @@ assert_eq "success: base" "$BASE_SHA" "$(jq -r .base "$BASE/success.out")"
 assert_eq "success: branch" agent/26-repair "$(jq -r .branch "$BASE/success.out")"
 assert_eq "success: worktree" "$WT" "$(jq -r .worktree "$BASE/success.out")"
 assert_eq "success: exact trusted body" "$GOOD_BODY" "$(jq -r .commentBody "$BASE/success.out")"
+assert_not_contains "success: token absent from stdout" "$BASE/success.out" "$SENTINEL"
+assert_not_contains "success: token absent from stderr" "$BASE/success.err" "$SENTINEL"
+assert_not_contains "success: token absent from gh log" "$LOG" "$SENTINEL"
 
 reject_case bad-issue "invalid issue-number" nope 44 "$FP"
 reject_case bad-pr "invalid pr-number" 26 nope "$FP"
