@@ -57,8 +57,9 @@ scripts/resolve-previous-review.sh <pr-number> <issue-number> <previous-fingerpr
 - **Exit 0** — prints the prior marker payload. Record its `head` and
   `base`: they are the previous snapshot this pass compares against.
 - **Exit 5** — the prior `PASS` is missing, malformed, authored by another
-  identity, for another issue/PR pair, `BLOCKING`, or ambiguous. Stop
-  without publishing and tell the user to run a full review.
+  identity, for another issue/PR pair, `BLOCKING`, ambiguous, or carries a
+  `head`/`base` that isn't a full commit ID. Stop without publishing and
+  tell the user to run a full review.
 - **Any other nonzero exit** — genuine script error. Stop and report.
 
 Then continue with Phase 2 unchanged. Phases 3–7 are the same pass, with
@@ -170,7 +171,9 @@ scripts/publish-review.sh <pr-number> <issue-number> <fingerprint-from-phase-2> 
 The script re-verifies the prior `PASS` from the comments it already
 fetches, prepends a header naming the mode and both snapshots' head/base,
 and adds `mode` and `previousFingerprint` to the `review-pr:v1` marker —
-additive fields existing consumers ignore. **Exit 5** means the prior
+additive fields existing consumers ignore. Resolution only trusts a marker
+whose `head`/`base` are full commit IDs, so that header always names real
+commits rather than a placeholder. **Exit 5** means the prior
 `PASS` stopped being trustworthy between Phase 1b and now: nothing was
 posted; stop and request a full review.
 
