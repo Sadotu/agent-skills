@@ -31,6 +31,7 @@ BASE="$(mktemp -d)"
 trap 'rm -rf "$BASE"' EXIT
 REPO="$BASE/repo"; WT="$BASE/repair"; REMOTE="$BASE/remote.git"; BIN="$BASE/bin"; LOG="$BASE/actions.log"
 TOKEN_SINK="$BASE/token-sink"; HELPER_LOG="$BASE/helper.log"
+GIT_TOKEN_SINK="$BASE/git-token-sink"
 # A token value distinctive enough that any leak into output is unambiguous.
 SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 mkdir -p "$REPO" "$BIN"
@@ -85,8 +86,11 @@ chmod +x "$BIN/gh"
 
 cat > "$BIN/git" <<'SH'
 #!/usr/bin/env bash
-if [ "${1:-}" = push ]; then
+is_push=0
+for arg in "$@"; do [ "$arg" = push ] && is_push=1; done
+if [ "$is_push" -eq 1 ]; then
   printf 'git %s\n' "$*" >> "$ACTION_LOG"
+  printf '%s' "${GIT_APP_TOKEN-}" > "$GIT_TOKEN_SINK"
   if [ "${FAIL_PUSH:-0}" = 1 ]; then echo "simulated push rejection" >&2; exit 42; fi
   if [ "${ADVANCE_HEAD_AT_PUSH:-0}" = 1 ]; then
     "$REAL_GIT" commit --allow-empty -qm 'concurrent branch advance'
@@ -108,9 +112,9 @@ write_evidence() {
 # never reaches the real /opt helper or mints a real token.
 run_case() {
   local name="$1"; shift
-  : > "$LOG"; : > "$TOKEN_SINK"; : > "$HELPER_LOG"
+  : > "$LOG"; : > "$TOKEN_SINK"; : > "$HELPER_LOG"; : > "$GIT_TOKEN_SINK"
   (cd "${CASE_CWD:-$WT}" && PATH="$BIN:$PATH" REAL_GIT="$REAL_GIT" ACTION_LOG="$LOG" \
-    TOKEN_SINK="$TOKEN_SINK" HELPER_LOG="$HELPER_LOG" SENTINEL_TOKEN="$SENTINEL" \
+    TOKEN_SINK="$TOKEN_SINK" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" HELPER_LOG="$HELPER_LOG" SENTINEL_TOKEN="$SENTINEL" \
     GH_APP_TOKEN_HELPER="${CASE_HELPER:-$BASE/gh-app-token.sh}" \
     STUB_GH_LOGGED_IN="${CASE_LOGGED_IN:-0}" \
     "$FINALIZE" "$@") \
@@ -139,6 +143,7 @@ assert_eq "success: exits zero" 0 "$CASE_RC"
 assert_eq "success: pushes repair head" "$REPAIR_HEAD" "$("$REAL_GIT" --git-dir="$REMOTE" rev-parse refs/heads/agent/26-repair)"
 assert_contains "success: reports pushed ref" "$BASE/success.out" "agent/26-repair"
 assert_token "success: gh receives the minted App token" "$SENTINEL" "$TOKEN_SINK"
+assert_token "success: git push receives a fresh App token" "$SENTINEL" "$GIT_TOKEN_SINK"
 assert_contains "success: helper is scoped to the repo" "$HELPER_LOG" "GITHUB_APP_REPO=test/repo"
 assert_not_contains "success: token absent from stdout" "$BASE/success.out" "$SENTINEL"
 assert_not_contains "success: token absent from stderr" "$BASE/success.err" "$SENTINEL"

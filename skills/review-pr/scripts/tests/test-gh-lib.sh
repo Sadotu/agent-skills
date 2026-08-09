@@ -44,6 +44,7 @@ BASE="$(mktemp -d)"
 trap 'rm -rf "$BASE"' EXIT
 REPO_DIR="$BASE/repo"; STUBBIN="$BASE/bin"
 GH_LOG="$BASE/gh.log"; TOKEN_SINK="$BASE/token-sink"; HELPER_LOG="$BASE/helper.log"
+GIT_LOG="$BASE/git.log"; GIT_TOKEN_SINK="$BASE/git-token-sink"
 mkdir -p "$REPO_DIR" "$STUBBIN"
 "$REAL_GIT" -C "$REPO_DIR" init -q
 "$REAL_GIT" -C "$REPO_DIR" remote add origin https://github.com/test/repo.git
@@ -72,15 +73,26 @@ echo "stub-gh-ok"
 SH
 chmod +x "$STUBBIN/gh"
 
+cat > "$STUBBIN/git" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-} ${3:-}" in
+  "remote get-url origin"|"worktree list --porcelain") exec "$REAL_GIT" "$@" ;;
+esac
+printf '%s\n' "$*" >> "$GIT_LOG"
+printf '%s' "${GIT_APP_TOKEN-}" > "$GIT_TOKEN_SINK"
+SH
+chmod +x "$STUBBIN/git"
+
 # run_lib <helper-path> <gh-args...> — source lib/gh.sh with the App-helper
 # path overridden, then make one GH call. Prints REPO/WORKSPACE so the test can
 # assert the lib's derived values too.
 run_lib() {
   local helper="$1"; shift
-  : > "$GH_LOG"; : > "$TOKEN_SINK"; : > "$HELPER_LOG"
+  : > "$GH_LOG"; : > "$TOKEN_SINK"; : > "$HELPER_LOG"; : > "$GIT_LOG"; : > "$GIT_TOKEN_SINK"
   (
     cd "$REPO_DIR" || exit 1
-    PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" TOKEN_SINK="$TOKEN_SINK" HELPER_LOG="$HELPER_LOG" \
+    PATH="$STUBBIN:$PATH" REAL_GIT="$REAL_GIT" GH_LOG="$GH_LOG" TOKEN_SINK="$TOKEN_SINK" HELPER_LOG="$HELPER_LOG" \
+      GIT_LOG="$GIT_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" \
       SENTINEL_TOKEN="$SENTINEL" GH_APP_TOKEN_HELPER="$helper" \
       bash -c 'source "$1" || exit 1; shift; GH "$@" || exit $?; printf "REPO=%s\n" "$REPO"' _ "$LIB" "$@"
   ) >"$BASE/out" 2>"$BASE/err"
@@ -113,6 +125,45 @@ else
   ok "helper mode api: --repo not appended"
 fi
 assert_token "helper mode api: gh receives the minted token" "$SENTINEL" "$TOKEN_SINK"
+
+# --- authenticated Git uses a fresh App token and clears ambient helpers ---
+: > "$GIT_LOG"; : > "$GIT_TOKEN_SINK"; : > "$HELPER_LOG"
+(
+  cd "$REPO_DIR" || exit 1
+  PATH="$STUBBIN:$PATH" REAL_GIT="$REAL_GIT" GIT_LOG="$GIT_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" \
+    HELPER_LOG="$HELPER_LOG" SENTINEL_TOKEN="$SENTINEL" GH_APP_TOKEN_HELPER="$BASE/gh-app-token.sh" \
+    bash -c 'source "$1" || exit 1; GIT_AUTH fetch origin' _ "$LIB"
+) >"$BASE/git-out" 2>"$BASE/git-err"
+git_rc=$?
+assert_eq "git auth: exits zero" 0 "$git_rc"
+assert_token "git auth: git receives App token through scoped environment" "$SENTINEL" "$GIT_TOKEN_SINK"
+assert_contains "git auth: ambient credential helpers cleared" "$GIT_LOG" "credential.helper="
+assert_contains "git auth: scoped App credential helper installed" "$GIT_LOG" "x-access-token"
+assert_not_contains "git auth: token absent from argv log" "$GIT_LOG" "$SENTINEL"
+assert_not_contains "git auth: token absent from stdout" "$BASE/git-out" "$SENTINEL"
+assert_not_contains "git auth: token absent from stderr" "$BASE/git-err" "$SENTINEL"
+
+cat > "$BASE/failing-helper.sh" <<'SH'
+#!/usr/bin/env bash
+exit 23
+SH
+chmod +x "$BASE/failing-helper.sh"
+cat > "$BASE/empty-helper.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+chmod +x "$BASE/empty-helper.sh"
+for helper_case in failing-helper.sh empty-helper.sh; do
+  : > "$GIT_LOG"; : > "$GIT_TOKEN_SINK"
+  (
+    cd "$REPO_DIR" || exit 1
+    PATH="$STUBBIN:$PATH" REAL_GIT="$REAL_GIT" GIT_LOG="$GIT_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" \
+      GH_APP_TOKEN_HELPER="$BASE/$helper_case" bash -c 'source "$1" || exit 1; GIT_AUTH push origin main' _ "$LIB"
+  ) >"$BASE/git-failure-out" 2>"$BASE/git-failure-err"
+  git_failure_rc=$?
+  if [ "$git_failure_rc" -ne 0 ]; then ok "git auth $helper_case: exits nonzero"; else fail "git auth $helper_case: exits nonzero"; fi
+  assert_eq "git auth $helper_case: git never invoked" "" "$(cat "$GIT_LOG")"
+done
 
 # --- Case 3: supported origin formats preserve dots in repository names ---
 for origin in \

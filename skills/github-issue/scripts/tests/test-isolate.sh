@@ -94,8 +94,12 @@ new_fixture() {
   CLONE="$BASE/clone"
   STUBBIN="$BASE/bin"
   GH_LOG="$BASE/gh.log"
+  GIT_NETWORK_LOG="$BASE/git-network.log"
+  GIT_TOKEN_SINK="$BASE/git-token-sink"
   APP_TOKEN_HELPER="$BASE/gh-app-token.sh"
   : > "$GH_LOG"
+  : > "$GIT_NETWORK_LOG"
+  : > "$GIT_TOKEN_SINK"
 
   git init -q --bare "$ORIGIN"
   git init -q "$CLONE"
@@ -113,17 +117,29 @@ new_fixture() {
 
   mkdir -p "$STUBBIN"
   write_gh_shim "$STUBBIN/gh"
-  cat > "$STUBBIN/git" <<'SHIM'
+cat > "$STUBBIN/git" <<'SHIM'
 #!/usr/bin/env bash
 if [ "${1:-} ${2:-} ${3:-}" = "remote get-url origin" ]; then
   echo https://github.com/testowner/testrepo.git
   exit 0
 fi
+for arg in "$@"; do
+  if [ "$arg" = fetch ] || [ "$arg" = push ]; then
+    printf '%s\n' "$*" >> "$GIT_NETWORK_LOG"
+    printf '%s' "${GIT_APP_TOKEN-}" >> "$GIT_TOKEN_SINK"
+    break
+  fi
+done
 exec "$REAL_GIT" "$@"
 SHIM
   chmod +x "$STUBBIN/git"
   printf '%s\n' '#!/usr/bin/env bash' 'printf '\''%s\n'\'' "$SENTINEL_TOKEN"' > "$APP_TOKEN_HELPER"
   chmod +x "$APP_TOKEN_HELPER"
+  cat > "$BASE/failing-helper.sh" <<'SHIM'
+#!/usr/bin/env bash
+exit 23
+SHIM
+  chmod +x "$BASE/failing-helper.sh"
 }
 
 # run_isolate <issue> <slug> <worktree-path> <pr-title>
@@ -135,7 +151,8 @@ run_isolate() {
     PATH="$STUBBIN:$PATH" \
     REAL_GIT="$REAL_GIT" \
     GH_LOG="$GH_LOG" \
-    GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" \
+    GIT_NETWORK_LOG="$GIT_NETWORK_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" \
+    GH_APP_TOKEN_HELPER="${CASE_HELPER:-$APP_TOKEN_HELPER}" \
     SENTINEL_TOKEN="$SENTINEL" \
     "$ISOLATE" "$@"
   )
@@ -218,6 +235,8 @@ test_case4_happy_path() {
     bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/agent/7-my-cool-slug"
   assert_true "case4: gh pr create was invoked" \
     bash -c "grep -q 'pr create' '$GH_LOG'"
+  assert_true "case4: network git receives App tokens" \
+    bash -c "[ -s '$GIT_TOKEN_SINK' ] && ! grep -qv '$SENTINEL' '$GIT_TOKEN_SINK'"
   assert_true "case4: PR title passed through" \
     bash -c "grep -q 'My PR Title' '$GH_LOG'"
 
@@ -229,6 +248,17 @@ test_case4_happy_path() {
     *"$expected_body"*) ok "case4: PR body is the exact template text" ;;
     *) fail "case4: PR body is the exact template text" ;;
   esac
+}
+
+test_case6_helper_failure_stops_network_git() {
+  new_fixture
+  local wt="$BASE/wt"
+  CASE_HELPER="$BASE/failing-helper.sh" run_isolate 20 auth-failure "$wt" "Title" >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset CASE_HELPER
+  assert_eq "case6: helper failure status preserved" 23 "$rc"
+  assert_eq "case6: network git never invoked" "" "$(cat "$GIT_NETWORK_LOG")"
+  assert_true "case6: no worktree created" [ ! -e "$wt" ]
 }
 
 # --- Case 5: explicit base-ref -> worktree branches from it, not origin/main ---
@@ -262,6 +292,7 @@ test_case2_diverged_main
 test_case3_not_on_main
 test_case4_happy_path
 test_case5_custom_base_ref
+test_case6_helper_failure_stops_network_git
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
