@@ -97,7 +97,16 @@ if [ "$is_push" -eq 1 ]; then
     "$REAL_GIT" rev-parse HEAD > "$ADVANCED_HEAD_FILE"
   fi
 fi
-exec "$REAL_GIT" "$@"
+rewritten=()
+for arg in "$@"; do
+  case "$arg" in
+    remote.origin.url=https://github.com/*|remote.origin.pushurl=https://github.com/*)
+      rewritten+=("${arg%%=*}=$TEST_REMOTE_URL") ;;
+    *) rewritten+=("$arg") ;;
+  esac
+done
+unset GIT_ALLOW_PROTOCOL
+exec "$REAL_GIT" "${rewritten[@]}"
 SH
 chmod +x "$BIN/git"
 
@@ -115,6 +124,7 @@ run_case() {
   : > "$LOG"; : > "$TOKEN_SINK"; : > "$HELPER_LOG"; : > "$GIT_TOKEN_SINK"
   (cd "${CASE_CWD:-$WT}" && PATH="$BIN:$PATH" REAL_GIT="$REAL_GIT" ACTION_LOG="$LOG" \
     TOKEN_SINK="$TOKEN_SINK" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" HELPER_LOG="$HELPER_LOG" SENTINEL_TOKEN="$SENTINEL" \
+    TEST_REMOTE_URL="$REMOTE" \
     GH_APP_TOKEN_HELPER="${CASE_HELPER:-$BASE/gh-app-token.sh}" \
     STUB_GH_LOGGED_IN="${CASE_LOGGED_IN:-0}" \
     "$FINALIZE" "$@") \

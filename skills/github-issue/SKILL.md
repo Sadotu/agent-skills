@@ -21,10 +21,11 @@ WORKSPACE="$(git rev-parse --show-toplevel)"
 source "$WORKSPACE/skills/github-issue/scripts/lib/gh.sh"
 ```
 
-Use `GIT_AUTH` for every network Git command. It mints a fresh App token,
-clears ambient credential helpers for that command, and supplies only the
-scoped `x-access-token` credential. Never run network `git` directly; if
-App token minting fails, stop and repair it with `/setup`.
+Use `GIT_AUTH` for every network Git command. It forces the canonical
+`https://github.com/$REPO.git` route, mints a fresh App token, clears ambient
+credentials for that command, and supplies only the scoped `x-access-token`
+credential. Never run network `git` directly; if App token minting fails,
+stop and repair it with `/setup`.
 
 ---
 

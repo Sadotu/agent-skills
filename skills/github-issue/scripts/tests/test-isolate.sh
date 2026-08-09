@@ -130,7 +130,16 @@ for arg in "$@"; do
     break
   fi
 done
-exec "$REAL_GIT" "$@"
+rewritten=()
+for arg in "$@"; do
+  case "$arg" in
+    remote.origin.url=https://github.com/*|remote.origin.pushurl=https://github.com/*)
+      rewritten+=("${arg%%=*}=$TEST_REMOTE_URL") ;;
+    *) rewritten+=("$arg") ;;
+  esac
+done
+unset GIT_ALLOW_PROTOCOL
+exec "$REAL_GIT" "${rewritten[@]}"
 SHIM
   chmod +x "$STUBBIN/git"
   printf '%s\n' '#!/usr/bin/env bash' 'printf '\''%s\n'\'' "$SENTINEL_TOKEN"' > "$APP_TOKEN_HELPER"
@@ -152,6 +161,7 @@ run_isolate() {
     REAL_GIT="$REAL_GIT" \
     GH_LOG="$GH_LOG" \
     GIT_NETWORK_LOG="$GIT_NETWORK_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" \
+    TEST_REMOTE_URL="$ORIGIN" \
     GH_APP_TOKEN_HELPER="${CASE_HELPER:-$APP_TOKEN_HELPER}" \
     SENTINEL_TOKEN="$SENTINEL" \
     "$ISOLATE" "$@"

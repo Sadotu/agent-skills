@@ -45,6 +45,7 @@ trap 'rm -rf "$BASE"' EXIT
 REPO_DIR="$BASE/repo"; STUBBIN="$BASE/bin"
 GH_LOG="$BASE/gh.log"; TOKEN_SINK="$BASE/token-sink"; HELPER_LOG="$BASE/helper.log"
 GIT_LOG="$BASE/git.log"; GIT_TOKEN_SINK="$BASE/git-token-sink"
+GIT_PROTOCOL_SINK="$BASE/git-protocol-sink"
 mkdir -p "$REPO_DIR" "$STUBBIN"
 "$REAL_GIT" -C "$REPO_DIR" init -q
 "$REAL_GIT" -C "$REPO_DIR" remote add origin https://github.com/test/repo.git
@@ -80,6 +81,7 @@ case "${1:-} ${2:-} ${3:-}" in
 esac
 printf '%s\n' "$*" >> "$GIT_LOG"
 printf '%s' "${GIT_APP_TOKEN-}" > "$GIT_TOKEN_SINK"
+printf '%s' "${GIT_ALLOW_PROTOCOL-}" > "$GIT_PROTOCOL_SINK"
 SH
 chmod +x "$STUBBIN/git"
 
@@ -88,11 +90,11 @@ chmod +x "$STUBBIN/git"
 # assert the lib's derived values too.
 run_lib() {
   local helper="$1"; shift
-  : > "$GH_LOG"; : > "$TOKEN_SINK"; : > "$HELPER_LOG"; : > "$GIT_LOG"; : > "$GIT_TOKEN_SINK"
+  : > "$GH_LOG"; : > "$TOKEN_SINK"; : > "$HELPER_LOG"; : > "$GIT_LOG"; : > "$GIT_TOKEN_SINK"; : > "$GIT_PROTOCOL_SINK"
   (
     cd "$REPO_DIR" || exit 1
     PATH="$STUBBIN:$PATH" REAL_GIT="$REAL_GIT" GH_LOG="$GH_LOG" TOKEN_SINK="$TOKEN_SINK" HELPER_LOG="$HELPER_LOG" \
-      GIT_LOG="$GIT_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" \
+      GIT_LOG="$GIT_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" GIT_PROTOCOL_SINK="$GIT_PROTOCOL_SINK" \
       SENTINEL_TOKEN="$SENTINEL" GH_APP_TOKEN_HELPER="$helper" \
       bash -c 'source "$1" || exit 1; shift; GH "$@" || exit $?; printf "REPO=%s\n" "$REPO"' _ "$LIB" "$@"
   ) >"$BASE/out" 2>"$BASE/err"
@@ -130,7 +132,7 @@ assert_token "helper mode api: gh receives the minted token" "$SENTINEL" "$TOKEN
 : > "$GIT_LOG"; : > "$GIT_TOKEN_SINK"; : > "$HELPER_LOG"
 (
   cd "$REPO_DIR" || exit 1
-  PATH="$STUBBIN:$PATH" REAL_GIT="$REAL_GIT" GIT_LOG="$GIT_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" \
+  PATH="$STUBBIN:$PATH" REAL_GIT="$REAL_GIT" GIT_LOG="$GIT_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" GIT_PROTOCOL_SINK="$GIT_PROTOCOL_SINK" \
     HELPER_LOG="$HELPER_LOG" SENTINEL_TOKEN="$SENTINEL" GH_APP_TOKEN_HELPER="$BASE/gh-app-token.sh" \
     bash -c 'source "$1" || exit 1; GIT_AUTH fetch origin' _ "$LIB"
 ) >"$BASE/git-out" 2>"$BASE/git-err"
@@ -138,7 +140,11 @@ git_rc=$?
 assert_eq "git auth: exits zero" 0 "$git_rc"
 assert_token "git auth: git receives App token through scoped environment" "$SENTINEL" "$GIT_TOKEN_SINK"
 assert_contains "git auth: ambient credential helpers cleared" "$GIT_LOG" "credential.helper="
+assert_contains "git auth: ambient HTTP authorization headers cleared" "$GIT_LOG" "http.extraHeader="
 assert_contains "git auth: scoped App credential helper installed" "$GIT_LOG" "x-access-token"
+assert_contains "git auth: forces GitHub HTTPS fetch URL" "$GIT_LOG" "remote.origin.url=https://github.com/test/repo.git"
+assert_contains "git auth: forces GitHub HTTPS push URL" "$GIT_LOG" "remote.origin.pushurl=https://github.com/test/repo.git"
+assert_eq "git auth: permits only HTTPS transport" "https" "$(cat "$GIT_PROTOCOL_SINK")"
 assert_not_contains "git auth: token absent from argv log" "$GIT_LOG" "$SENTINEL"
 assert_not_contains "git auth: token absent from stdout" "$BASE/git-out" "$SENTINEL"
 assert_not_contains "git auth: token absent from stderr" "$BASE/git-err" "$SENTINEL"
@@ -164,6 +170,20 @@ for helper_case in failing-helper.sh empty-helper.sh; do
   if [ "$git_failure_rc" -ne 0 ]; then ok "git auth $helper_case: exits nonzero"; else fail "git auth $helper_case: exits nonzero"; fi
   assert_eq "git auth $helper_case: git never invoked" "" "$(cat "$GIT_LOG")"
 done
+
+set_origin git@github.com:acme/widget.js.git
+"$REAL_GIT" -C "$REPO_DIR" remote set-url --push origin ssh://git@github.com/attacker/other.git
+: > "$GIT_LOG"
+(
+  cd "$REPO_DIR" || exit 1
+  PATH="$STUBBIN:$PATH" REAL_GIT="$REAL_GIT" GIT_LOG="$GIT_LOG" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" \
+    GIT_PROTOCOL_SINK="$GIT_PROTOCOL_SINK" HELPER_LOG="$HELPER_LOG" SENTINEL_TOKEN="$SENTINEL" \
+    GH_APP_TOKEN_HELPER="$BASE/gh-app-token.sh" bash -c 'source "$1" || exit 1; GIT_AUTH push -u origin main' _ "$LIB"
+) >/dev/null 2>"$BASE/ssh-route-err"
+assert_contains "git auth: SCP origin cannot select SSH fetch route" "$GIT_LOG" "remote.origin.url=https://github.com/acme/widget.js.git"
+assert_contains "git auth: configured pushurl cannot select SSH identity" "$GIT_LOG" "remote.origin.pushurl=https://github.com/acme/widget.js.git"
+set_origin https://github.com/test/repo.git
+"$REAL_GIT" -C "$REPO_DIR" config --unset-all remote.origin.pushurl || true
 
 # --- Case 3: supported origin formats preserve dots in repository names ---
 for origin in \

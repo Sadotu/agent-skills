@@ -117,10 +117,12 @@ new_fixture() {
   CLONE="$BASE/clone"
   STUBBIN="$BASE/bin"
   GH_LOG="$BASE/gh.log"
+  GIT_NETWORK_LOG="$BASE/git-network.log"
   APP_TOKEN_HELPER="$BASE/gh-app-token.sh"
   BRANCH="agent/${issue}-${slug}"
   WT="$BASE/wt"
   : > "$GH_LOG"
+  : > "$GIT_NETWORK_LOG"
 
   git init -q --bare "$ORIGIN"
   git init -q "$CLONE"
@@ -163,7 +165,22 @@ if [ "${1:-} ${2:-} ${3:-}" = "remote get-url origin" ]; then
   echo https://github.com/testowner/testrepo.git
   exit 0
 fi
-exec "$REAL_GIT" "$@"
+for arg in "$@"; do
+  if [ "$arg" = fetch ] || [ "$arg" = push ] || [ "$arg" = ls-remote ]; then
+    printf '%s:%s\n' "$arg" "${GIT_APP_TOKEN-}" >> "$GIT_NETWORK_LOG"
+    break
+  fi
+done
+rewritten=()
+for arg in "$@"; do
+  case "$arg" in
+    remote.origin.url=https://github.com/*|remote.origin.pushurl=https://github.com/*)
+      rewritten+=("${arg%%=*}=$TEST_REMOTE_URL") ;;
+    *) rewritten+=("$arg") ;;
+  esac
+done
+unset GIT_ALLOW_PROTOCOL
+exec "$REAL_GIT" "${rewritten[@]}"
 SHIM
   chmod +x "$STUBBIN/git"
   cat > "$APP_TOKEN_HELPER" <<'SHIM'
@@ -208,6 +225,8 @@ run_cleanup() {
     PATH="$STUBBIN:$PATH" \
     REAL_GIT="$REAL_GIT" \
     GH_LOG="$GH_LOG" \
+    GIT_NETWORK_LOG="$GIT_NETWORK_LOG" \
+    TEST_REMOTE_URL="$ORIGIN" \
     GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" \
     SENTINEL_TOKEN="$SENTINEL" \
     "$CLEANUP" "$pr" "$issue"
@@ -325,6 +344,8 @@ test_case6_happy_path() {
   unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
 
   assert_eq "case6a: exits zero on the full happy path" 0 "$rc"
+  assert_true "case6a: initial fetch uses App-scoped Git" \
+    bash -c "grep -q '^fetch:$SENTINEL$' '$GIT_NETWORK_LOG'"
   assert_true "case6a: worktree removed" [ ! -e "$WT" ]
   assert_false "case6a: local branch deleted" \
     bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
