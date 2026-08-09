@@ -5,7 +5,28 @@
 # a script runs as its own process and cannot inherit that block's shell
 # variables or the GH() function.
 
-REPO="$(git remote get-url origin | sed -E 's#.*[:/]([^/]+/[^/.]+)(\.git)?$#\1#')"
+origin="$(git remote get-url origin 2>/dev/null)" || {
+  echo "invalid GitHub origin: unable to read git remote origin" >&2
+  return 1 2>/dev/null || exit 1
+}
+case "$origin" in
+  https://github.com/*) repo_path="${origin#https://github.com/}" ;;
+  git@github.com:*) repo_path="${origin#git@github.com:}" ;;
+  ssh://git@github.com/*) repo_path="${origin#ssh://git@github.com/}" ;;
+  *)
+    echo "invalid GitHub origin: expected owner/repo on github.com" >&2
+    return 1 2>/dev/null || exit 1
+    ;;
+esac
+repo_path="${repo_path%/}"
+repo_path="${repo_path%.git}"
+owner="${repo_path%%/*}"
+repo="${repo_path#*/}"
+if [ -z "$owner" ] || [ -z "$repo" ] || [ "$repo" = "$repo_path" ] || [[ "$repo" = */* ]]; then
+  echo "invalid GitHub origin: expected exactly owner/repo" >&2
+  return 1 2>/dev/null || exit 1
+fi
+REPO="$owner/$repo"
 
 # `git worktree list --porcelain`'s first entry is always the primary
 # worktree, regardless of the caller's cwd — unlike `git rev-parse
@@ -24,9 +45,19 @@ fi
 
 # Mint a short-lived GitHub App token per call.
 GH() {
+  local token rc
+  token="$(GITHUB_APP_REPO=$REPO "$GH_APP_TOKEN_HELPER")" || {
+    rc=$?
+    echo "failed to mint GitHub App token; run /setup to repair App authentication" >&2
+    return "$rc"
+  }
+  if [ -z "$token" ]; then
+    echo "GitHub App token helper returned an empty token; run /setup to repair App authentication" >&2
+    return 1
+  fi
   if [ "${1:-}" = api ]; then
-    GH_TOKEN="$(GITHUB_APP_REPO=$REPO "$GH_APP_TOKEN_HELPER")" gh "$@"
+    GH_TOKEN="$token" gh "$@"
   else
-    GH_TOKEN="$(GITHUB_APP_REPO=$REPO "$GH_APP_TOKEN_HELPER")" gh "$@" --repo "$REPO"
+    GH_TOKEN="$token" gh "$@" --repo "$REPO"
   fi
 }

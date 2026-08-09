@@ -82,9 +82,13 @@ run_lib() {
     cd "$REPO_DIR" || exit 1
     PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" TOKEN_SINK="$TOKEN_SINK" HELPER_LOG="$HELPER_LOG" \
       SENTINEL_TOKEN="$SENTINEL" GH_APP_TOKEN_HELPER="$helper" \
-      bash -c 'source "$1" || exit 1; shift; GH "$@"; printf "REPO=%s\n" "$REPO"' _ "$LIB" "$@"
+      bash -c 'source "$1" || exit 1; shift; GH "$@" || exit $?; printf "REPO=%s\n" "$REPO"' _ "$LIB" "$@"
   ) >"$BASE/out" 2>"$BASE/err"
   RC=$?
+}
+
+set_origin() {
+  "$REAL_GIT" -C "$REPO_DIR" remote set-url origin "$1"
 }
 
 # --- Case 1: helper-backed environment (devcontainer) ---
@@ -110,7 +114,44 @@ else
 fi
 assert_token "helper mode api: gh receives the minted token" "$SENTINEL" "$TOKEN_SINK"
 
-# --- Case 3: missing App helper fails closed, even with logged-in stub gh ---
+# --- Case 3: supported origin formats preserve dots in repository names ---
+for origin in \
+  https://github.com/acme/widget.js.git \
+  git@github.com:acme/widget.js.git \
+  ssh://git@github.com/acme/widget.js.git
+do
+  set_origin "$origin"
+  run_lib "$BASE/gh-app-token.sh" pr view 44
+  assert_eq "origin $origin: exits zero" 0 "$RC"
+  assert_contains "origin $origin: derives dotted repo" "$BASE/out" "REPO=acme/widget.js"
+  assert_contains "origin $origin: scopes helper" "$HELPER_LOG" "GITHUB_APP_REPO=acme/widget.js"
+done
+set_origin https://github.com/test/repo.git
+
+# --- Case 4: helper failures and empty tokens never reach gh ---
+cat > "$BASE/failing-helper.sh" <<'SH'
+#!/usr/bin/env bash
+exit 23
+SH
+chmod +x "$BASE/failing-helper.sh"
+run_lib "$BASE/failing-helper.sh" pr view 44
+assert_eq "failing helper: preserves failure" 23 "$RC"
+assert_contains "failing helper: useful error" "$BASE/err" "failed to mint"
+assert_eq "failing helper: gh never invoked" "" "$(cat "$GH_LOG")"
+assert_token "failing helper: no token delivered" "" "$TOKEN_SINK"
+
+cat > "$BASE/empty-helper.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+chmod +x "$BASE/empty-helper.sh"
+run_lib "$BASE/empty-helper.sh" pr view 44
+assert_eq "empty helper: exits nonzero" 1 "$RC"
+assert_contains "empty helper: useful error" "$BASE/err" "empty token"
+assert_eq "empty helper: gh never invoked" "" "$(cat "$GH_LOG")"
+assert_token "empty helper: no token delivered" "" "$TOKEN_SINK"
+
+# --- Case 5: missing App helper fails closed, even with logged-in stub gh ---
 run_lib "$BASE/absent-helper.sh" pr view 44 --json headRefName
 assert_eq "missing helper: exits nonzero" 1 "$RC"
 assert_contains "missing helper: directs user to setup" "$BASE/err" "/setup"
@@ -118,14 +159,22 @@ assert_eq "missing helper: gh never invoked" "" "$(cat "$GH_LOG")"
 assert_token "missing helper: no token delivered" "" "$TOKEN_SINK"
 assert_eq "missing helper: helper never invoked" "" "$(cat "$HELPER_LOG")"
 
-# --- Case 4: missing App helper also blocks the `api` subcommand ---
+# --- Case 6: missing App helper also blocks the `api` subcommand ---
 run_lib "$BASE/absent-helper.sh" api repos/test/repo/pulls/44
 assert_eq "missing helper api: exits nonzero" 1 "$RC"
 assert_contains "missing helper api: directs user to setup" "$BASE/err" "/setup"
 assert_eq "missing helper api: gh never invoked" "" "$(cat "$GH_LOG")"
 assert_token "missing helper api: no token delivered" "" "$TOKEN_SINK"
 
-# --- Case 5: the production default path is unchanged ---
+# --- Case 7: invalid origins fail before helper or gh ---
+set_origin https://github.com/acme/team/widget.git
+run_lib "$BASE/gh-app-token.sh" pr view 44
+assert_eq "invalid origin: exits nonzero" 1 "$RC"
+assert_contains "invalid origin: useful error" "$BASE/err" "invalid GitHub origin"
+assert_eq "invalid origin: helper never invoked" "" "$(cat "$HELPER_LOG")"
+assert_eq "invalid origin: gh never invoked" "" "$(cat "$GH_LOG")"
+
+# --- Case 8: the production default path is unchanged ---
 if grep -qF '/opt/agent-devcontainer/gh-app-token.sh' "$LIB"; then
   ok "default: devcontainer helper path preserved"
 else

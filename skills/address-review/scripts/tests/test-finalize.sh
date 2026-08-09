@@ -57,16 +57,19 @@ printf '%s\n' "$SENTINEL_TOKEN"
 SH
 chmod +x "$BASE/gh-app-token.sh"
 
+cat > "$BASE/failing-helper.sh" <<'SH'
+#!/usr/bin/env bash
+exit 23
+SH
+chmod +x "$BASE/failing-helper.sh"
+
 # Stub gh. `pr view` demands credentials the way real `gh` does — either a
 # GH_TOKEN in its environment or a logged-in host — so an unauthenticated
 # finalizer reproduces the reported failure instead of silently passing.
-# `repo view` answers unconditionally: repo resolution is not the guarded call
-# under test, and a deterministic answer keeps REPO off the local remote path.
 cat > "$BIN/gh" <<'SH'
 #!/usr/bin/env bash
 printf 'gh %s\n' "$*" >> "$ACTION_LOG"
 printf '%s' "${GH_TOKEN-}" >> "$TOKEN_SINK"
-if [ "$1 $2" = "repo view" ]; then echo test/repo; exit 0; fi
 if [ -z "${GH_TOKEN-}" ] && [ "${STUB_GH_LOGGED_IN:-0}" != 1 ]; then
   echo "To get started with GitHub CLI, please run: gh auth login" >&2
   exit 4
@@ -141,8 +144,22 @@ assert_not_contains "success: token absent from stdout" "$BASE/success.out" "$SE
 assert_not_contains "success: token absent from stderr" "$BASE/success.err" "$SENTINEL"
 assert_not_contains "success: token absent from action log" "$LOG" "$SENTINEL"
 
-# --- missing App helper fails closed even when the stub gh is logged in ---
+# --- helper mint failure stops before gh or push, even with logged-in gh ---
 "$REAL_GIT" --git-dir="$REMOTE" update-ref -d refs/heads/agent/26-repair
+write_evidence success
+CASE_HELPER="$BASE/failing-helper.sh" CASE_LOGGED_IN=1 \
+  run_case helper-failure 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+assert_eq "helper failure: preserves failure" 23 "$CASE_RC"
+assert_contains "helper failure: useful error" "$BASE/helper-failure.err" "failed to mint"
+assert_eq "helper failure: gh never invoked" "" "$(cat "$LOG")"
+assert_token "helper failure: no token injected" "" "$TOKEN_SINK"
+if "$REAL_GIT" --git-dir="$REMOTE" show-ref --verify --quiet refs/heads/agent/26-repair; then
+  fail "helper failure: no push"
+else
+  ok "helper failure: no push"
+fi
+
+# --- missing App helper fails closed even when the stub gh is logged in ---
 write_evidence success
 CASE_HELPER="$BASE/absent-helper.sh" CASE_LOGGED_IN=1 \
   run_case missing-helper-logged-in 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
