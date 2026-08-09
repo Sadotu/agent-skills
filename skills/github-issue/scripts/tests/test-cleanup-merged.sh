@@ -10,6 +10,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLEANUP="$SCRIPT_DIR/../cleanup-merged.sh"
+REAL_GIT="$(command -v git)"
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 
 PASS=0
 FAIL=0
@@ -71,10 +73,11 @@ write_gh_shim() {
   cat > "$1" <<'SHIM'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
+if [ "${GH_TOKEN-}" != "$SENTINEL_TOKEN" ]; then
+  echo "stub gh requires the expected App token" >&2
+  exit 4
+fi
 case "$1 $2" in
-  "repo view")
-    echo "${STUB_REPO:-testowner/testrepo}"
-    ;;
   "pr view")
     printf '{"state":"%s","headRefName":"%s","mergeCommit":{"oid":"%s"}}\n' \
       "${STUB_PR_STATE:-OPEN}" "${STUB_PR_HEAD_REF:-agent/0-x}" "${STUB_PR_MERGE_COMMIT:-}"
@@ -93,7 +96,7 @@ SHIM
   chmod +x "$1"
 }
 
-# new_fixture sets: BASE ORIGIN CLONE STUBBIN GH_LOG APP_DIR_STUB BRANCH WT
+# new_fixture sets: BASE ORIGIN CLONE STUBBIN GH_LOG APP_TOKEN_HELPER BRANCH WT
 # CLONE stands in for $WORKSPACE (the primary worktree), on main, in sync
 # with ORIGIN. WT is a linked worktree checked out on $BRANCH, with one
 # commit ahead of origin/main and pushed to the fake origin — not yet
@@ -114,7 +117,7 @@ new_fixture() {
   CLONE="$BASE/clone"
   STUBBIN="$BASE/bin"
   GH_LOG="$BASE/gh.log"
-  APP_DIR_STUB="$BASE/no-app-creds"
+  APP_TOKEN_HELPER="$BASE/gh-app-token.sh"
   BRANCH="agent/${issue}-${slug}"
   WT="$BASE/wt"
   : > "$GH_LOG"
@@ -154,6 +157,20 @@ new_fixture() {
 
   mkdir -p "$STUBBIN"
   write_gh_shim "$STUBBIN/gh"
+  cat > "$STUBBIN/git" <<'SHIM'
+#!/usr/bin/env bash
+if [ "${1:-} ${2:-} ${3:-}" = "remote get-url origin" ]; then
+  echo https://github.com/testowner/testrepo.git
+  exit 0
+fi
+exec "$REAL_GIT" "$@"
+SHIM
+  chmod +x "$STUBBIN/git"
+  cat > "$APP_TOKEN_HELPER" <<'SHIM'
+#!/usr/bin/env bash
+printf '%s\n' "$SENTINEL_TOKEN"
+SHIM
+  chmod +x "$APP_TOKEN_HELPER"
 }
 
 # merge_branch_into_origin_main fast-forwards local + remote main to
@@ -183,16 +200,16 @@ push_direct_commit_to_main() {
 
 # run_cleanup <cwd> <pr-number> <issue-number>
 # Invokes cleanup-merged.sh with the given cwd, a stubbed `gh` ahead on
-# PATH, and no real GitHub App credentials reachable (so the devcontainer
-# token-mint path fails locally instead of hitting the network).
+# PATH, and a hermetic stub GitHub App token helper.
 run_cleanup() {
   local cwd="$1" pr="$2" issue="$3"
   (
     cd "$cwd" || exit 99
     PATH="$STUBBIN:$PATH" \
+    REAL_GIT="$REAL_GIT" \
     GH_LOG="$GH_LOG" \
-    GITHUB_APP_DIR="$APP_DIR_STUB" \
-    STUB_REPO="testowner/testrepo" \
+    GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" \
+    SENTINEL_TOKEN="$SENTINEL" \
     "$CLEANUP" "$pr" "$issue"
   )
 }
