@@ -23,6 +23,10 @@ WORKSPACE="$(git rev-parse --show-toplevel)"
 source "$WORKSPACE/skills/review-pr/scripts/lib/gh.sh"
 ```
 
+Use `GIT_AUTH` for every network Git command. It mints a fresh App token,
+clears ambient credential helpers for that command, and supplies only the
+scoped `x-access-token` credential; never run network `git` directly.
+
 ---
 
 ## Phase 1 — Resolve inputs
@@ -78,7 +82,7 @@ primary worktree, never a branch checkout, so nothing can accidentally get
 committed:
 
 ```bash
-git fetch origin
+GIT_AUTH fetch origin
 tmp_review_dir="$(mktemp -d)"
 git worktree add --detach "$tmp_review_dir" <head-sha>
 ```

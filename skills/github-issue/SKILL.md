@@ -21,7 +21,10 @@ WORKSPACE="$(git rev-parse --show-toplevel)"
 source "$WORKSPACE/skills/github-issue/scripts/lib/gh.sh"
 ```
 
-`git` push/fetch must use the App credential helper wired by `/setup`. If that helper is unavailable or a personal credential helper is configured, stop and repair the App setup instead of falling back.
+Use `GIT_AUTH` for every network Git command. It mints a fresh App token,
+clears ambient credential helpers for that command, and supplies only the
+scoped `x-access-token` credential. Never run network `git` directly; if
+App token minting fails, stop and repair it with `/setup`.
 
 ---
 
@@ -196,7 +199,7 @@ Report production, test, and documentation line counts separately.
 **Before pushing, guard against a stale base** — a branch that has fallen behind `origin/main` produces a bloated, dangerous PR diff:
 
 ```bash
-git fetch origin
+GIT_AUTH fetch origin
 base=$(git merge-base origin/main HEAD)
 behind=$(git rev-list --count "$base"..origin/main)
 [ "$behind" -gt 50 ] && echo "STALE BASE: $behind commits behind origin/main — rebase before PR"

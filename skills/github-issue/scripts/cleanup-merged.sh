@@ -157,8 +157,8 @@ else
   # Never use -D on any other path; never loosen this gate.
   git branch -D "$BRANCH"
 fi
-if git ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
-  git push origin --delete "$BRANCH"
+if GIT_AUTH ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
+  GIT_AUTH push origin --delete "$BRANCH"
 fi
 
 # --- Fast-forward local main without resetting or cleaning user files ---

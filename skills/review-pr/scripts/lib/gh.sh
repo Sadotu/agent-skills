@@ -43,8 +43,7 @@ if [ ! -x "$GH_APP_TOKEN_HELPER" ]; then
   return 1 2>/dev/null || exit 1
 fi
 
-# Mint a short-lived GitHub App token per call.
-GH() {
+_mint_app_token() {
   local token rc
   token="$(GITHUB_APP_REPO=$REPO "$GH_APP_TOKEN_HELPER")" || {
     rc=$?
@@ -55,9 +54,25 @@ GH() {
     echo "GitHub App token helper returned an empty token; run /setup to repair App authentication" >&2
     return 1
   fi
+  printf '%s' "$token"
+}
+
+# Mint a short-lived GitHub App token per call.
+GH() {
+  local token
+  token="$(_mint_app_token)" || return $?
   if [ "${1:-}" = api ]; then
     GH_TOKEN="$token" gh "$@"
   else
     GH_TOKEN="$token" gh "$@" --repo "$REPO"
   fi
+}
+
+# Run a network Git operation with only freshly minted App credentials.
+GIT_AUTH() {
+  local token credential_helper
+  token="$(_mint_app_token)" || return $?
+  credential_helper='!f() { if [ "$1" = get ]; then printf "%s\n" "username=x-access-token" "password=$GIT_APP_TOKEN"; fi; }; f'
+  GIT_APP_TOKEN="$token" GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= \
+    git -c credential.helper= -c "credential.helper=$credential_helper" "$@"
 }
