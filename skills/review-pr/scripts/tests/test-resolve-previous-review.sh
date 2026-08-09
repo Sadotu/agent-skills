@@ -5,6 +5,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLVE="$SCRIPT_DIR/../resolve-previous-review.sh"
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 
 PASS=0
 FAIL=0
@@ -31,15 +32,15 @@ assert_contains() {
   if grep -qF "$pattern" "$file"; then ok "$desc"; else fail "$desc (missing [$pattern] in $file)"; fi
 }
 
-# Fake `gh`: only `repo view` and `pr view --json comments` are expected.
+# Fake `gh`: only `pr view --json comments` is expected.
 # Any write (`pr comment`, `pr review`, `pr merge`) is a hard failure — this
 # script must never mutate anything.
 write_gh_shim() {
   cat > "$1" <<'SHIM'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
+if [ "${GH_TOKEN-}" != "$SENTINEL_TOKEN" ]; then exit 4; fi
 case "$1 $2" in
-  "repo view") echo "${STUB_REPO:-testowner/testrepo}" ;;
   "pr view")
     if printf '%s\n' "$*" | grep -q -- '--json comments'; then
       cat "${STUB_COMMENTS_JSON_FILE:-/dev/null}"
@@ -60,7 +61,13 @@ new_fixture() {
   STUBBIN="$BASE/bin"
   GH_LOG="$BASE/gh.log"
   COMMENTS_FILE="$BASE/comments.json"
+  REPO_DIR="$BASE/repo"
+  APP_TOKEN_HELPER="$BASE/gh-app-token.sh"
   mkdir -p "$STUBBIN"
+  git init -q "$REPO_DIR"
+  git -C "$REPO_DIR" remote add origin https://github.com/testowner/testrepo.git
+  printf '%s\n' '#!/usr/bin/env bash' 'printf '\''%s\n'\'' "$SENTINEL_TOKEN"' > "$APP_TOKEN_HELPER"
+  chmod +x "$APP_TOKEN_HELPER"
   : > "$GH_LOG"
   echo '{"comments":[]}' > "$COMMENTS_FILE"
   write_gh_shim "$STUBBIN/gh"
@@ -82,8 +89,9 @@ write_comments() {
 }
 
 run_resolve() {
-  PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" STUB_REPO="testowner/testrepo" \
-    STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" "$RESOLVE" "$@"
+  (cd "$REPO_DIR" && PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" \
+    GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" SENTINEL_TOKEN="$SENTINEL" \
+    STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" "$RESOLVE" "$@")
 }
 
 # --- Case 1: trusted prior PASS resolves ---

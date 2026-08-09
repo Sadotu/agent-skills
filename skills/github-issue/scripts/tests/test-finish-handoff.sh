@@ -8,6 +8,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HANDOFF="$SCRIPT_DIR/../finish-handoff.sh"
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 
 PASS=0
 FAIL=0
@@ -49,13 +50,11 @@ write_gh_shim() {
   cat > "$1" <<'SHIM'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
+if [ "${GH_TOKEN-}" != "$SENTINEL_TOKEN" ]; then exit 4; fi
 if [ -n "${FAIL_ON:-}" ] && [[ "$*" == *"$FAIL_ON"* ]]; then
   exit 1
 fi
 case "$1 $2" in
-  "repo view")
-    echo "${STUB_REPO:-testowner/testrepo}"
-    ;;
   "issue view")
     IFS=',' read -ra labels <<< "${STUB_ISSUE_LABELS:-}"
     for l in "${labels[@]}"; do
@@ -80,10 +79,11 @@ SHIM
 # `gh` ahead on PATH.
 run_handoff() {
   local pr="$1" issue="$2"
-  PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" STUB_REPO="testowner/testrepo" \
+  (cd "$REPO_DIR" && PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" \
+    GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" SENTINEL_TOKEN="$SENTINEL" \
     STUB_ISSUE_LABELS="${STUB_ISSUE_LABELS:-}" STUB_PR_LABELS="${STUB_PR_LABELS:-}" \
     FAIL_ON="${FAIL_ON:-}" \
-    "$HANDOFF" "$pr" "$issue"
+    "$HANDOFF" "$pr" "$issue")
 }
 
 new_fixture() {
@@ -91,7 +91,13 @@ new_fixture() {
   TMP_DIRS+=("$BASE")
   STUBBIN="$BASE/bin"
   GH_LOG="$BASE/gh.log"
+  REPO_DIR="$BASE/repo"
+  APP_TOKEN_HELPER="$BASE/gh-app-token.sh"
   mkdir -p "$STUBBIN"
+  git init -q "$REPO_DIR"
+  git -C "$REPO_DIR" remote add origin https://github.com/testowner/testrepo.git
+  printf '%s\n' '#!/usr/bin/env bash' 'printf '\''%s\n'\'' "$SENTINEL_TOKEN"' > "$APP_TOKEN_HELPER"
+  chmod +x "$APP_TOKEN_HELPER"
   : > "$GH_LOG"
   write_gh_shim "$STUBBIN/gh"
 }

@@ -9,6 +9,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ISOLATE="$SCRIPT_DIR/../isolate.sh"
+REAL_GIT="$(command -v git)"
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 
 PASS=0
 FAIL=0
@@ -59,10 +61,8 @@ write_gh_shim() {
   cat > "$1" <<'SHIM'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
+if [ "${GH_TOKEN-}" != "$SENTINEL_TOKEN" ]; then exit 4; fi
 case "$1 $2" in
-  "repo view")
-    echo "${STUB_REPO:-testowner/testrepo}"
-    ;;
   "pr view")
     printf '{"state":"%s","headRefName":"%s"}\n' \
       "${STUB_PR_STATE:-OPEN}" "${STUB_PR_HEAD_REF:-agent/0-x}"
@@ -84,7 +84,7 @@ SHIM
   chmod +x "$1"
 }
 
-# new_fixture sets: BASE ORIGIN CLONE STUBBIN GH_LOG APP_DIR_STUB
+# new_fixture sets: BASE ORIGIN CLONE STUBBIN GH_LOG APP_TOKEN_HELPER
 # CLONE stands in for the primary worktree, checked out on main, clean,
 # in sync with ORIGIN.
 new_fixture() {
@@ -94,7 +94,7 @@ new_fixture() {
   CLONE="$BASE/clone"
   STUBBIN="$BASE/bin"
   GH_LOG="$BASE/gh.log"
-  APP_DIR_STUB="$BASE/no-app-creds"
+  APP_TOKEN_HELPER="$BASE/gh-app-token.sh"
   : > "$GH_LOG"
 
   git init -q --bare "$ORIGIN"
@@ -113,19 +113,30 @@ new_fixture() {
 
   mkdir -p "$STUBBIN"
   write_gh_shim "$STUBBIN/gh"
+  cat > "$STUBBIN/git" <<'SHIM'
+#!/usr/bin/env bash
+if [ "${1:-} ${2:-} ${3:-}" = "remote get-url origin" ]; then
+  echo https://github.com/testowner/testrepo.git
+  exit 0
+fi
+exec "$REAL_GIT" "$@"
+SHIM
+  chmod +x "$STUBBIN/git"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf '\''%s\n'\'' "$SENTINEL_TOKEN"' > "$APP_TOKEN_HELPER"
+  chmod +x "$APP_TOKEN_HELPER"
 }
 
 # run_isolate <issue> <slug> <worktree-path> <pr-title>
 # Invokes isolate.sh with cwd = $CLONE (the primary worktree), a stubbed
-# `gh` ahead on PATH, and no real GitHub App credentials reachable (so the
-# devcontainer token-mint path fails locally instead of hitting the network).
+# `gh` ahead on PATH and a hermetic stub GitHub App token helper.
 run_isolate() {
   (
     cd "$CLONE" || exit 99
     PATH="$STUBBIN:$PATH" \
+    REAL_GIT="$REAL_GIT" \
     GH_LOG="$GH_LOG" \
-    GITHUB_APP_DIR="$APP_DIR_STUB" \
-    STUB_REPO="testowner/testrepo" \
+    GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" \
+    SENTINEL_TOKEN="$SENTINEL" \
     "$ISOLATE" "$@"
   )
 }
