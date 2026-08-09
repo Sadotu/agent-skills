@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Tests for scripts/lib/gh.sh — verifies the GH() wrapper authenticates
+# correctly in both environments it adapts to: the devcontainer, where a
+# short-lived GitHub App token is minted per call, and an ordinary machine
+# where the caller's own `gh auth login` credential is used. No network.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB="$SCRIPT_DIR/../lib/gh.sh"
+REAL_GIT="$(command -v git)"
+
+PASS=0
+FAIL=0
+
+ok()   { PASS=$((PASS + 1)); echo "ok - $1"; }
+fail() { FAIL=$((FAIL + 1)); echo "not ok - $1"; }
+
+assert_eq() {
+  local desc="$1" expected="$2" actual="$3"
+  if [ "$expected" = "$actual" ]; then ok "$desc"; else fail "$desc (expected [$expected], got [$actual])"; fi
+}
+assert_contains() {
+  local desc="$1" file="$2" pattern="$3"
+  if grep -qF "$pattern" "$file"; then ok "$desc"; else fail "$desc (missing [$pattern] in $file)"; fi
+}
+assert_not_contains() {
+  local desc="$1" file="$2" pattern="$3"
+  if grep -qF "$pattern" "$file"; then fail "$desc (unexpected [$pattern] in $file)"; else ok "$desc"; fi
+}
+# Compares a captured token without ever echoing it: a mismatch here can hold a
+# real short-lived App token, which must not reach the test output.
+assert_token() {
+  local desc="$1" expected="$2" file="$3" actual
+  actual="$(cat "$file")"
+  if [ "$expected" = "$actual" ]; then
+    ok "$desc"
+  elif [ -z "$actual" ]; then
+    fail "$desc (no token delivered)"
+  else
+    fail "$desc (delivered token differs from the expected stub value; value redacted)"
+  fi
+}
+
+BASE="$(mktemp -d)"
+trap 'rm -rf "$BASE"' EXIT
+REPO_DIR="$BASE/repo"; STUBBIN="$BASE/bin"
+GH_LOG="$BASE/gh.log"; TOKEN_SINK="$BASE/token-sink"; HELPER_LOG="$BASE/helper.log"
+mkdir -p "$REPO_DIR" "$STUBBIN"
+"$REAL_GIT" -C "$REPO_DIR" init -q
+"$REAL_GIT" -C "$REPO_DIR" remote add origin https://github.com/test/repo.git
+
+# A token value distinctive enough that any leak into script output is
+# unambiguous when grepped for.
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
+
+# Stub App-token helper: stands in for /opt/agent-devcontainer/gh-app-token.sh.
+cat > "$BASE/gh-app-token.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'GITHUB_APP_REPO=%s\n' "${GITHUB_APP_REPO-<unset>}" >> "$HELPER_LOG"
+printf '%s\n' "$SENTINEL_TOKEN"
+SH
+chmod +x "$BASE/gh-app-token.sh"
+
+# Stub gh: records its arguments, and records the GH_TOKEN it was handed to a
+# sink file that is deliberately NOT part of the script's stdout/stderr, so the
+# no-leak assertions stay meaningful.
+cat > "$STUBBIN/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_LOG"
+printf '%s' "${GH_TOKEN-}" >> "$TOKEN_SINK"
+if [ "$1 $2" = "repo view" ]; then echo test/repo; exit 0; fi
+echo "stub-gh-ok"
+SH
+chmod +x "$STUBBIN/gh"
+
+# run_lib <helper-path> <gh-args...> — source lib/gh.sh with the App-helper
+# path overridden, then make one GH call. Prints REPO/WORKSPACE so the test can
+# assert the lib's derived values too.
+run_lib() {
+  local helper="$1"; shift
+  : > "$GH_LOG"; : > "$TOKEN_SINK"; : > "$HELPER_LOG"
+  (
+    cd "$REPO_DIR" || exit 1
+    PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" TOKEN_SINK="$TOKEN_SINK" HELPER_LOG="$HELPER_LOG" \
+      SENTINEL_TOKEN="$SENTINEL" GH_APP_TOKEN_HELPER="$helper" \
+      bash -c 'source "$1" || exit 1; shift; GH "$@"; printf "REPO=%s\n" "$REPO"' _ "$LIB" "$@"
+  ) >"$BASE/out" 2>"$BASE/err"
+  RC=$?
+}
+
+# --- Case 1: helper-backed environment (devcontainer) ---
+run_lib "$BASE/gh-app-token.sh" pr view 44 --json headRefName
+assert_eq "helper mode: exits zero" 0 "$RC"
+assert_contains "helper mode: appends --repo to non-api call" "$GH_LOG" \
+  "pr view 44 --json headRefName --repo test/repo"
+assert_token "helper mode: gh receives the minted token" "$SENTINEL" "$TOKEN_SINK"
+assert_contains "helper mode: helper is scoped to the repo" "$HELPER_LOG" "GITHUB_APP_REPO=test/repo"
+assert_contains "helper mode: derives REPO" "$BASE/out" "REPO=test/repo"
+assert_not_contains "helper mode: token absent from stdout" "$BASE/out" "$SENTINEL"
+assert_not_contains "helper mode: token absent from stderr" "$BASE/err" "$SENTINEL"
+assert_not_contains "helper mode: token absent from command log" "$GH_LOG" "$SENTINEL"
+
+# --- Case 2: helper-backed environment, `api` subcommand ---
+run_lib "$BASE/gh-app-token.sh" api repos/test/repo/pulls/44
+assert_eq "helper mode api: exits zero" 0 "$RC"
+assert_contains "helper mode api: no --repo appended" "$GH_LOG" "api repos/test/repo/pulls/44"
+if grep -qF -- "--repo" "$GH_LOG"; then
+  fail "helper mode api: --repo not appended"
+else
+  ok "helper mode api: --repo not appended"
+fi
+assert_token "helper mode api: gh receives the minted token" "$SENTINEL" "$TOKEN_SINK"
+
+# --- Case 3: ordinary environment (own `gh auth login`, no App helper) ---
+run_lib "$BASE/absent-helper.sh" pr view 44 --json headRefName
+assert_eq "ordinary mode: exits zero" 0 "$RC"
+assert_contains "ordinary mode: appends --repo" "$GH_LOG" \
+  "pr view 44 --json headRefName --repo test/repo"
+assert_token "ordinary mode: lib sets no GH_TOKEN" "" "$TOKEN_SINK"
+assert_eq "ordinary mode: helper never invoked" "" "$(cat "$HELPER_LOG")"
+
+# --- Case 4: ordinary environment, `api` subcommand ---
+run_lib "$BASE/absent-helper.sh" api repos/test/repo/pulls/44
+assert_eq "ordinary mode api: exits zero" 0 "$RC"
+if grep -qF -- "--repo" "$GH_LOG"; then
+  fail "ordinary mode api: --repo not appended"
+else
+  ok "ordinary mode api: --repo not appended"
+fi
+assert_token "ordinary mode api: lib sets no GH_TOKEN" "" "$TOKEN_SINK"
+
+# --- Case 5: the production default path is unchanged ---
+if grep -qF '/opt/agent-devcontainer/gh-app-token.sh' "$LIB"; then
+  ok "default: devcontainer helper path preserved"
+else
+  fail "default: devcontainer helper path preserved"
+fi
+
+echo "1..$((PASS + FAIL))"
+echo "# pass $PASS fail $FAIL"
+[ "$FAIL" -eq 0 ]

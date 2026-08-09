@@ -14,13 +14,17 @@ REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null \
 # be running in.
 WORKSPACE="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
 
-if [ -x /opt/agent-devcontainer/gh-app-token.sh ]; then
+# Overridable only so tests can exercise both authentication environments
+# without mutating the machine; unset means the devcontainer's real helper.
+GH_APP_TOKEN_HELPER="${GH_APP_TOKEN_HELPER:-/opt/agent-devcontainer/gh-app-token.sh}"
+
+if [ -x "$GH_APP_TOKEN_HELPER" ]; then
   # devcontainer: mint a short-lived GitHub App token per call
   GH() {
     if [ "${1:-}" = api ]; then
-      GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@"
+      GH_TOKEN="$(GITHUB_APP_REPO=$REPO "$GH_APP_TOKEN_HELPER")" gh "$@"
     else
-      GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@" --repo "$REPO"
+      GH_TOKEN="$(GITHUB_APP_REPO=$REPO "$GH_APP_TOKEN_HELPER")" gh "$@" --repo "$REPO"
     fi
   }
 else

@@ -15,10 +15,24 @@ assert_eq() {
 assert_contains() {
   if grep -qF "$3" "$2"; then ok "$1"; else fail "$1 (missing [$3])"; fi
 }
+assert_not_contains() {
+  if grep -qF "$3" "$2"; then fail "$1 (unexpected [$3])"; else ok "$1"; fi
+}
+# Compares a captured token without ever echoing it: a mismatch here can hold a
+# real short-lived App token, which must not reach the test output.
+assert_token() {
+  local desc="$1" expected="$2" actual; actual="$(cat "$3")"
+  if [ "$expected" = "$actual" ]; then ok "$desc"
+  elif [ -z "$actual" ]; then fail "$desc (no token delivered)"
+  else fail "$desc (delivered token differs from the expected stub value; value redacted)"; fi
+}
 
 BASE="$(mktemp -d)"
 trap 'rm -rf "$BASE"' EXIT
 REPO="$BASE/repo"; WT="$BASE/repair"; REMOTE="$BASE/remote.git"; BIN="$BASE/bin"; LOG="$BASE/actions.log"
+TOKEN_SINK="$BASE/token-sink"; HELPER_LOG="$BASE/helper.log"
+# A token value distinctive enough that any leak into output is unambiguous.
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 mkdir -p "$REPO" "$BIN"
 "$REAL_GIT" init -q --bare "$REMOTE"
 "$REAL_GIT" -C "$REPO" init -q
@@ -34,9 +48,28 @@ printf 'repair\n' > "$WT/change.txt"
 "$REAL_GIT" -C "$WT" commit -qm repair
 REPAIR_HEAD="$("$REAL_GIT" -C "$WT" rev-parse HEAD)"
 
+# Stub App-token helper: stands in for /opt/agent-devcontainer/gh-app-token.sh.
+cat > "$BASE/gh-app-token.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'GITHUB_APP_REPO=%s\n' "${GITHUB_APP_REPO-<unset>}" >> "$HELPER_LOG"
+printf '%s\n' "$SENTINEL_TOKEN"
+SH
+chmod +x "$BASE/gh-app-token.sh"
+
+# Stub gh. `pr view` demands credentials the way real `gh` does — either a
+# GH_TOKEN in its environment or a logged-in host — so an unauthenticated
+# finalizer reproduces the reported failure instead of silently passing.
+# `repo view` answers unconditionally: repo resolution is not the guarded call
+# under test, and a deterministic answer keeps REPO off the local remote path.
 cat > "$BIN/gh" <<'SH'
 #!/usr/bin/env bash
 printf 'gh %s\n' "$*" >> "$ACTION_LOG"
+printf '%s' "${GH_TOKEN-}" >> "$TOKEN_SINK"
+if [ "$1 $2" = "repo view" ]; then echo test/repo; exit 0; fi
+if [ -z "${GH_TOKEN-}" ] && [ "${STUB_GH_LOGGED_IN:-0}" != 1 ]; then
+  echo "To get started with GitHub CLI, please run: gh auth login" >&2
+  exit 4
+fi
 if [ "$1 $2 $3" = "pr view 44" ]; then
   jq -n --arg head "${STUB_BRANCH:-agent/26-repair}" '{headRefName:$head}'
 else
@@ -65,10 +98,18 @@ write_evidence() {
     '{status:$status,command:$command,result:$result}' > "$BASE/verification.json"
 }
 
+# Cases default to the devcontainer environment: the App-token helper is
+# present and the host has no `gh auth login`. CASE_HELPER/CASE_LOGGED_IN swap
+# that for an ordinary machine. The helper path is always set, so a test run
+# never reaches the real /opt helper or mints a real token.
 run_case() {
   local name="$1"; shift
-  : > "$LOG"
-  (cd "${CASE_CWD:-$WT}" && PATH="$BIN:$PATH" REAL_GIT="$REAL_GIT" ACTION_LOG="$LOG" "$FINALIZE" "$@") \
+  : > "$LOG"; : > "$TOKEN_SINK"; : > "$HELPER_LOG"
+  (cd "${CASE_CWD:-$WT}" && PATH="$BIN:$PATH" REAL_GIT="$REAL_GIT" ACTION_LOG="$LOG" \
+    TOKEN_SINK="$TOKEN_SINK" HELPER_LOG="$HELPER_LOG" SENTINEL_TOKEN="$SENTINEL" \
+    GH_APP_TOKEN_HELPER="${CASE_HELPER:-$BASE/gh-app-token.sh}" \
+    STUB_GH_LOGGED_IN="${CASE_LOGGED_IN:-0}" \
+    "$FINALIZE" "$@") \
     >"$BASE/$name.out" 2>"$BASE/$name.err"
   CASE_RC=$?
 }
@@ -86,11 +127,36 @@ reject_case() {
   fi
 }
 
+# --- success in the devcontainer: the App helper supplies the token, and the
+# caller exports no GH_TOKEN of its own ---
 write_evidence success
 run_case success 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
 assert_eq "success: exits zero" 0 "$CASE_RC"
 assert_eq "success: pushes repair head" "$REPAIR_HEAD" "$("$REAL_GIT" --git-dir="$REMOTE" rev-parse refs/heads/agent/26-repair)"
 assert_contains "success: reports pushed ref" "$BASE/success.out" "agent/26-repair"
+assert_token "success: gh receives the minted App token" "$SENTINEL" "$TOKEN_SINK"
+assert_contains "success: helper is scoped to the repo" "$HELPER_LOG" "GITHUB_APP_REPO=test/repo"
+assert_not_contains "success: token absent from stdout" "$BASE/success.out" "$SENTINEL"
+assert_not_contains "success: token absent from stderr" "$BASE/success.err" "$SENTINEL"
+assert_not_contains "success: token absent from action log" "$LOG" "$SENTINEL"
+
+# --- success on an ordinary machine: no App helper, caller's own gh login ---
+"$REAL_GIT" --git-dir="$REMOTE" update-ref -d refs/heads/agent/26-repair
+write_evidence success
+CASE_HELPER="$BASE/absent-helper.sh" CASE_LOGGED_IN=1 \
+  run_case local-auth 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+assert_eq "local auth: exits zero" 0 "$CASE_RC"
+assert_eq "local auth: pushes repair head" "$REPAIR_HEAD" "$("$REAL_GIT" --git-dir="$REMOTE" rev-parse refs/heads/agent/26-repair)"
+assert_token "local auth: no token injected" "" "$TOKEN_SINK"
+assert_eq "local auth: helper never invoked" "" "$(cat "$HELPER_LOG")"
+
+# --- neither credential available: fail loudly, never push a half-guarded repair ---
+write_evidence success
+CASE_HELPER="$BASE/absent-helper.sh" CASE_LOGGED_IN=0 \
+  run_case unauthenticated 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+if [ "$CASE_RC" -ne 0 ]; then ok "unauthenticated: nonzero"; else fail "unauthenticated: nonzero"; fi
+assert_contains "unauthenticated: surfaces gh's own message" "$BASE/unauthenticated.err" "gh auth login"
+if grep -q '^git push ' "$LOG"; then fail "unauthenticated: no push"; else ok "unauthenticated: no push"; fi
 
 write_evidence success
 ADVANCE_HEAD_AT_PUSH=1 ADVANCED_HEAD_FILE="$BASE/advanced-head" \
