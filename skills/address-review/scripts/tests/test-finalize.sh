@@ -15,10 +15,25 @@ assert_eq() {
 assert_contains() {
   if grep -qF "$3" "$2"; then ok "$1"; else fail "$1 (missing [$3])"; fi
 }
+assert_not_contains() {
+  if grep -qF "$3" "$2"; then fail "$1 (unexpected [$3])"; else ok "$1"; fi
+}
+# Compares a captured token without ever echoing it: a mismatch here can hold a
+# real short-lived App token, which must not reach the test output.
+assert_token() {
+  local desc="$1" expected="$2" actual; actual="$(cat "$3")"
+  if [ "$expected" = "$actual" ]; then ok "$desc"
+  elif [ -z "$actual" ]; then fail "$desc (no token delivered)"
+  else fail "$desc (delivered token differs from the expected stub value; value redacted)"; fi
+}
 
 BASE="$(mktemp -d)"
 trap 'rm -rf "$BASE"' EXIT
 REPO="$BASE/repo"; WT="$BASE/repair"; REMOTE="$BASE/remote.git"; BIN="$BASE/bin"; LOG="$BASE/actions.log"
+TOKEN_SINK="$BASE/token-sink"; HELPER_LOG="$BASE/helper.log"
+GIT_TOKEN_SINK="$BASE/git-token-sink"
+# A token value distinctive enough that any leak into output is unambiguous.
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 mkdir -p "$REPO" "$BIN"
 "$REAL_GIT" init -q --bare "$REMOTE"
 "$REAL_GIT" -C "$REPO" init -q
@@ -26,7 +41,8 @@ mkdir -p "$REPO" "$BIN"
 "$REAL_GIT" -C "$REPO" config user.name Test
 "$REAL_GIT" -C "$REPO" commit --allow-empty -qm init
 "$REAL_GIT" -C "$REPO" branch -M main
-"$REAL_GIT" -C "$REPO" remote add origin "$REMOTE"
+"$REAL_GIT" -C "$REPO" remote add origin https://github.com/test/repo.git
+"$REAL_GIT" -C "$REPO" remote set-url --push origin "$REMOTE"
 "$REAL_GIT" -C "$REPO" worktree add -qb agent/26-repair "$WT"
 INSPECTED_HEAD="$("$REAL_GIT" -C "$WT" rev-parse HEAD)"
 printf 'repair\n' > "$WT/change.txt"
@@ -34,9 +50,31 @@ printf 'repair\n' > "$WT/change.txt"
 "$REAL_GIT" -C "$WT" commit -qm repair
 REPAIR_HEAD="$("$REAL_GIT" -C "$WT" rev-parse HEAD)"
 
+# Stub App-token helper: stands in for /opt/agent-devcontainer/gh-app-token.sh.
+cat > "$BASE/gh-app-token.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'GITHUB_APP_REPO=%s\n' "${GITHUB_APP_REPO-<unset>}" >> "$HELPER_LOG"
+printf '%s\n' "$SENTINEL_TOKEN"
+SH
+chmod +x "$BASE/gh-app-token.sh"
+
+cat > "$BASE/failing-helper.sh" <<'SH'
+#!/usr/bin/env bash
+exit 23
+SH
+chmod +x "$BASE/failing-helper.sh"
+
+# Stub gh. `pr view` demands credentials the way real `gh` does — either a
+# GH_TOKEN in its environment or a logged-in host — so an unauthenticated
+# finalizer reproduces the reported failure instead of silently passing.
 cat > "$BIN/gh" <<'SH'
 #!/usr/bin/env bash
 printf 'gh %s\n' "$*" >> "$ACTION_LOG"
+printf '%s' "${GH_TOKEN-}" >> "$TOKEN_SINK"
+if [ -z "${GH_TOKEN-}" ] && [ "${STUB_GH_LOGGED_IN:-0}" != 1 ]; then
+  echo "To get started with GitHub CLI, please run: gh auth login" >&2
+  exit 4
+fi
 if [ "$1 $2 $3" = "pr view 44" ]; then
   jq -n --arg head "${STUB_BRANCH:-agent/26-repair}" '{headRefName:$head}'
 else
@@ -48,15 +86,26 @@ chmod +x "$BIN/gh"
 
 cat > "$BIN/git" <<'SH'
 #!/usr/bin/env bash
-if [ "${1:-}" = push ]; then
+is_push=0
+for arg in "$@"; do [ "$arg" = push ] && is_push=1; done
+if [ "$is_push" -eq 1 ]; then
   printf 'git %s\n' "$*" >> "$ACTION_LOG"
+  printf '%s' "${GIT_APP_TOKEN-}" > "$GIT_TOKEN_SINK"
   if [ "${FAIL_PUSH:-0}" = 1 ]; then echo "simulated push rejection" >&2; exit 42; fi
   if [ "${ADVANCE_HEAD_AT_PUSH:-0}" = 1 ]; then
     "$REAL_GIT" commit --allow-empty -qm 'concurrent branch advance'
     "$REAL_GIT" rev-parse HEAD > "$ADVANCED_HEAD_FILE"
   fi
 fi
-exec "$REAL_GIT" "$@"
+rewritten=()
+for arg in "$@"; do
+  case "$arg" in
+    https://github.com/test/repo.git) rewritten+=("$TEST_REMOTE_URL") ;;
+    *) rewritten+=("$arg") ;;
+  esac
+done
+unset GIT_ALLOW_PROTOCOL
+exec "$REAL_GIT" "${rewritten[@]}"
 SH
 chmod +x "$BIN/git"
 
@@ -65,10 +114,19 @@ write_evidence() {
     '{status:$status,command:$command,result:$result}' > "$BASE/verification.json"
 }
 
+# Cases default to the devcontainer environment: the App-token helper is
+# present and the host has no `gh auth login`. CASE_HELPER/CASE_LOGGED_IN can
+# simulate a missing helper and a logged-in user. The helper path is always set, so a test run
+# never reaches the real /opt helper or mints a real token.
 run_case() {
   local name="$1"; shift
-  : > "$LOG"
-  (cd "${CASE_CWD:-$WT}" && PATH="$BIN:$PATH" REAL_GIT="$REAL_GIT" ACTION_LOG="$LOG" "$FINALIZE" "$@") \
+  : > "$LOG"; : > "$TOKEN_SINK"; : > "$HELPER_LOG"; : > "$GIT_TOKEN_SINK"
+  (cd "${CASE_CWD:-$WT}" && PATH="$BIN:$PATH" REAL_GIT="$REAL_GIT" ACTION_LOG="$LOG" \
+    TOKEN_SINK="$TOKEN_SINK" GIT_TOKEN_SINK="$GIT_TOKEN_SINK" HELPER_LOG="$HELPER_LOG" SENTINEL_TOKEN="$SENTINEL" \
+    TEST_REMOTE_URL="$REMOTE" \
+    GH_APP_TOKEN_HELPER="${CASE_HELPER:-$BASE/gh-app-token.sh}" \
+    STUB_GH_LOGGED_IN="${CASE_LOGGED_IN:-0}" \
+    "$FINALIZE" "$@") \
     >"$BASE/$name.out" 2>"$BASE/$name.err"
   CASE_RC=$?
 }
@@ -86,11 +144,58 @@ reject_case() {
   fi
 }
 
+# --- success in the devcontainer: the App helper supplies the token, and the
+# caller exports no GH_TOKEN of its own ---
 write_evidence success
 run_case success 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
 assert_eq "success: exits zero" 0 "$CASE_RC"
 assert_eq "success: pushes repair head" "$REPAIR_HEAD" "$("$REAL_GIT" --git-dir="$REMOTE" rev-parse refs/heads/agent/26-repair)"
 assert_contains "success: reports pushed ref" "$BASE/success.out" "agent/26-repair"
+assert_token "success: gh receives the minted App token" "$SENTINEL" "$TOKEN_SINK"
+assert_token "success: git push receives a fresh App token" "$SENTINEL" "$GIT_TOKEN_SINK"
+assert_contains "success: helper is scoped to the repo" "$HELPER_LOG" "GITHUB_APP_REPO=test/repo"
+assert_not_contains "success: token absent from stdout" "$BASE/success.out" "$SENTINEL"
+assert_not_contains "success: token absent from stderr" "$BASE/success.err" "$SENTINEL"
+assert_not_contains "success: token absent from action log" "$LOG" "$SENTINEL"
+
+# --- helper mint failure stops before gh or push, even with logged-in gh ---
+"$REAL_GIT" --git-dir="$REMOTE" update-ref -d refs/heads/agent/26-repair
+write_evidence success
+CASE_HELPER="$BASE/failing-helper.sh" CASE_LOGGED_IN=1 \
+  run_case helper-failure 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+assert_eq "helper failure: preserves failure" 23 "$CASE_RC"
+assert_contains "helper failure: useful error" "$BASE/helper-failure.err" "failed to mint"
+assert_eq "helper failure: gh never invoked" "" "$(cat "$LOG")"
+assert_token "helper failure: no token injected" "" "$TOKEN_SINK"
+if "$REAL_GIT" --git-dir="$REMOTE" show-ref --verify --quiet refs/heads/agent/26-repair; then
+  fail "helper failure: no push"
+else
+  ok "helper failure: no push"
+fi
+
+# --- missing App helper fails closed even when the stub gh is logged in ---
+write_evidence success
+CASE_HELPER="$BASE/absent-helper.sh" CASE_LOGGED_IN=1 \
+  run_case missing-helper-logged-in 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+assert_eq "missing helper logged in: exits nonzero" 1 "$CASE_RC"
+assert_contains "missing helper logged in: directs user to setup" "$BASE/missing-helper-logged-in.err" "/setup"
+assert_eq "missing helper logged in: gh never invoked" "" "$(cat "$LOG")"
+assert_token "missing helper logged in: no token injected" "" "$TOKEN_SINK"
+assert_eq "missing helper logged in: helper never invoked" "" "$(cat "$HELPER_LOG")"
+if "$REAL_GIT" --git-dir="$REMOTE" show-ref --verify --quiet refs/heads/agent/26-repair; then
+  fail "missing helper logged in: no push"
+else
+  ok "missing helper logged in: no push"
+fi
+
+# --- neither credential available: fail loudly, never push a half-guarded repair ---
+write_evidence success
+CASE_HELPER="$BASE/absent-helper.sh" CASE_LOGGED_IN=0 \
+  run_case unauthenticated 26 44 "$INSPECTED_HEAD" agent/26-repair "$WT" "$BASE/verification.json"
+if [ "$CASE_RC" -ne 0 ]; then ok "unauthenticated: nonzero"; else fail "unauthenticated: nonzero"; fi
+assert_contains "unauthenticated: directs user to setup" "$BASE/unauthenticated.err" "/setup"
+assert_eq "unauthenticated: gh never invoked" "" "$(cat "$LOG")"
+if grep -q '^git push ' "$LOG"; then fail "unauthenticated: no push"; else ok "unauthenticated: no push"; fi
 
 write_evidence success
 ADVANCE_HEAD_AT_PUSH=1 ADVANCED_HEAD_FILE="$BASE/advanced-head" \

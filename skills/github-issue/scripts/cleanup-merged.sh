@@ -37,7 +37,7 @@ case "$BRANCH" in agent/*) ;; *) echo "Refusing to delete non-agent branch: $BRA
 #     human. Known limitation: patch-id hashes diff context lines, so
 #     unrelated commits shifting that context can produce a false
 #     negative even for a clean squash -- fails safe, left as-is. ---
-git -C "$WORKSPACE" fetch origin
+GIT_AUTH -C "$WORKSPACE" fetch origin '+refs/heads/*:refs/remotes/origin/*'
 
 if git -C "$WORKSPACE" merge-base --is-ancestor "$BRANCH" origin/main; then
   MERGE_MODE=regular
@@ -157,8 +157,8 @@ else
   # Never use -D on any other path; never loosen this gate.
   git branch -D "$BRANCH"
 fi
-if git ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
-  git push origin --delete "$BRANCH"
+if GIT_AUTH ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
+  GIT_AUTH push origin --delete "$BRANCH"
 fi
 
 # --- Fast-forward local main without resetting or cleaning user files ---

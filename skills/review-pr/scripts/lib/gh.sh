@@ -5,8 +5,28 @@
 # a script runs as its own process and cannot inherit that block's shell
 # variables or the GH() function.
 
-REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null \
-  || git remote get-url origin | sed -E 's#.*[:/]([^/]+/[^/.]+)(\.git)?$#\1#')"
+origin="$(git remote get-url origin 2>/dev/null)" || {
+  echo "invalid GitHub origin: unable to read git remote origin" >&2
+  return 1 2>/dev/null || exit 1
+}
+case "$origin" in
+  https://github.com/*) repo_path="${origin#https://github.com/}" ;;
+  git@github.com:*) repo_path="${origin#git@github.com:}" ;;
+  ssh://git@github.com/*) repo_path="${origin#ssh://git@github.com/}" ;;
+  *)
+    echo "invalid GitHub origin: expected owner/repo on github.com" >&2
+    return 1 2>/dev/null || exit 1
+    ;;
+esac
+repo_path="${repo_path%/}"
+repo_path="${repo_path%.git}"
+owner="${repo_path%%/*}"
+repo="${repo_path#*/}"
+if [ -z "$owner" ] || [ -z "$repo" ] || [ "$repo" = "$repo_path" ] || [[ "$repo" = */* ]]; then
+  echo "invalid GitHub origin: expected exactly owner/repo" >&2
+  return 1 2>/dev/null || exit 1
+fi
+REPO="$owner/$repo"
 
 # `git worktree list --porcelain`'s first entry is always the primary
 # worktree, regardless of the caller's cwd — unlike `git rev-parse
@@ -14,22 +34,51 @@ REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null \
 # be running in.
 WORKSPACE="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
 
-if [ -x /opt/agent-devcontainer/gh-app-token.sh ]; then
-  # devcontainer: mint a short-lived GitHub App token per call
-  GH() {
-    if [ "${1:-}" = api ]; then
-      GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@"
-    else
-      GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@" --repo "$REPO"
-    fi
-  }
-else
-  # elsewhere: use your own authenticated gh (run `gh auth login` first)
-  GH() {
-    if [ "${1:-}" = api ]; then
-      gh "$@"
-    else
-      gh "$@" --repo "$REPO"
-    fi
-  }
+# Overridable only so tests can exercise helper success and failure without
+# mutating the machine; unset means the devcontainer's real helper.
+GH_APP_TOKEN_HELPER="${GH_APP_TOKEN_HELPER:-/opt/agent-devcontainer/gh-app-token.sh}"
+
+if [ ! -x "$GH_APP_TOKEN_HELPER" ]; then
+  echo "GitHub App token helper is unavailable or not executable: $GH_APP_TOKEN_HELPER. Run /setup to configure GitHub App authentication." >&2
+  return 1 2>/dev/null || exit 1
 fi
+
+_mint_app_token() {
+  local token rc
+  token="$(GITHUB_APP_REPO=$REPO "$GH_APP_TOKEN_HELPER")" || {
+    rc=$?
+    echo "failed to mint GitHub App token; run /setup to repair App authentication" >&2
+    return "$rc"
+  }
+  if [ -z "$token" ]; then
+    echo "GitHub App token helper returned an empty token; run /setup to repair App authentication" >&2
+    return 1
+  fi
+  printf '%s' "$token"
+}
+
+# Mint a short-lived GitHub App token per call.
+GH() {
+  local token
+  token="$(_mint_app_token)" || return $?
+  if [ "${1:-}" = api ]; then
+    GH_TOKEN="$token" gh "$@"
+  else
+    GH_TOKEN="$token" gh "$@" --repo "$REPO"
+  fi
+}
+
+# Run a network Git operation with only freshly minted App credentials.
+GIT_AUTH() {
+  local token credential_helper remote_url arg
+  local -a git_args=()
+  token="$(_mint_app_token)" || return $?
+  remote_url="https://github.com/$REPO.git"
+  for arg in "$@"; do
+    if [ "$arg" = origin ]; then git_args+=("$remote_url"); else git_args+=("$arg"); fi
+  done
+  credential_helper='!f() { [ "$1" = get ] || exit 0; protocol= host= path=; while IFS="=" read -r key value; do case "$key" in protocol) protocol="$value";; host) host="$value";; path) path="$value";; esac; done; if [ "$protocol" = https ] && [ "$host" = github.com ] && [ "$path" = "$GIT_APP_REPO.git" ]; then printf "%s\n" "username=x-access-token" "password=$GIT_APP_TOKEN"; fi; }; f'
+  GIT_APP_TOKEN="$token" GIT_ALLOW_PROTOCOL=https GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= \
+    GIT_APP_REPO="$REPO" git -c credential.helper= -c "credential.helper=$credential_helper" \
+      -c credential.useHttpPath=true -c http.extraHeader= "${git_args[@]}"
+}

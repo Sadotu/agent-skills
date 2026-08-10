@@ -10,6 +10,9 @@ issue="$1"; pr="$2"; inspected_head="$3"; branch="$4"; worktree="$5"; evidence="
 case "$issue" in ''|*[!0-9]*) die "invalid issue-number: $issue" ;; esac
 case "$pr" in ''|*[!0-9]*) die "invalid pr-number: $pr" ;; esac
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/../../review-pr/scripts/lib/gh.sh"
+
 [ -d "$worktree" ] || die "worktree does not exist: $worktree"
 [ "$(pwd -P)" = "$(cd "$worktree" && pwd -P)" ] || die "finalizer must run from exact worktree: $worktree"
 
@@ -22,7 +25,7 @@ worktree_matches="$(git worktree list --porcelain | awk -v path="$worktree" -v r
 [ "$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)" = "$branch" ] \
   || die "current branch does not match inspected branch: $branch"
 
-pr_branch="$(gh pr view "$pr" --json headRefName | jq -r .headRefName)"
+pr_branch="$(GH pr view "$pr" --json headRefName | jq -r .headRefName)"
 [ "$pr_branch" = "$branch" ] || die "PR #$pr head branch changed: expected $branch, found $pr_branch"
 
 git cat-file -e "$inspected_head^{commit}" 2>/dev/null || die "inspected head is not a commit: $inspected_head"
@@ -38,7 +41,7 @@ jq -e '.status == "success" and (.command | type == "string" and length > 0) and
 
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked worktree changes must be clean before finalization"
 
-if git push origin "$current_head:refs/heads/$branch"; then
+if GIT_AUTH push origin "$current_head:refs/heads/$branch"; then
   echo "pushed $current_head to refs/heads/$branch for issue #$issue PR #$pr"
 else
   rc=$?

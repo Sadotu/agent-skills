@@ -5,6 +5,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PUBLISH="$SCRIPT_DIR/../publish-review.sh"
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 
 PASS=0
 FAIL=0
@@ -49,10 +50,8 @@ write_gh_shim() {
   cat > "$1" <<'SHIM'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
+if [ "${GH_TOKEN-}" != "$SENTINEL_TOKEN" ]; then exit 4; fi
 case "$1 $2" in
-  "repo view")
-    echo "${STUB_REPO:-testowner/testrepo}"
-    ;;
   "pr view")
     if printf '%s\n' "$*" | grep -q -- '--json comments'; then
       cat "${STUB_COMMENTS_JSON_FILE:-/dev/null}"
@@ -104,7 +103,13 @@ new_fixture() {
   POSTED_BODY_FILE="$BASE/posted.txt"
   COMMENTS_FILE="$BASE/comments.json"
   BODY_FILE="$BASE/review-body.txt"
+  REPO_DIR="$BASE/repo"
+  APP_TOKEN_HELPER="$BASE/gh-app-token.sh"
   mkdir -p "$STUBBIN"
+  git init -q "$REPO_DIR"
+  git -C "$REPO_DIR" remote add origin https://github.com/testowner/testrepo.git
+  printf '%s\n' '#!/usr/bin/env bash' 'printf '\''%s\n'\'' "$SENTINEL_TOKEN"' > "$APP_TOKEN_HELPER"
+  chmod +x "$APP_TOKEN_HELPER"
   : > "$GH_LOG"
   echo '{"comments":[]}' > "$COMMENTS_FILE"
   echo "Review findings go here." > "$BODY_FILE"
@@ -129,19 +134,25 @@ write_comments() {
 
 run_snapshot() {
   local pr="$1" issue="$2"
-  PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" STUB_REPO="testowner/testrepo" \
+  (cd "$REPO_DIR" && PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" \
+    GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" SENTINEL_TOKEN="$SENTINEL" \
     STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
     STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
-    "$SCRIPT_DIR/../snapshot.sh" "$pr" "$issue" | jq -r .fingerprint
+    "$SCRIPT_DIR/../snapshot.sh" "$pr" "$issue") | jq -r .fingerprint
+}
+
+run_publish_raw() {
+  (cd "$REPO_DIR" && PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
+    GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" SENTINEL_TOKEN="$SENTINEL" \
+    STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
+    STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
+    STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
+    "$PUBLISH" "$@")
 }
 
 run_publish() {
   local pr="$1" issue="$2" fp="$3" verdict="$4"
-  PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
-    STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
-    STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
-    STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
-    "$PUBLISH" "$pr" "$issue" "$fp" "$verdict" "$BODY_FILE"
+  run_publish_raw "$pr" "$issue" "$fp" "$verdict" "$BODY_FILE"
 }
 
 common_stubs() {
@@ -306,11 +317,7 @@ integration_marker() {
 
 run_publish_integration() {
   local pr="$1" issue="$2" fp="$3" verdict="$4" prev="$5"
-  PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
-    STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
-    STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
-    STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
-    "$PUBLISH" "$pr" "$issue" "$fp" "$verdict" "$BODY_FILE" --mode integration --previous-fingerprint "$prev"
+  run_publish_raw "$pr" "$issue" "$fp" "$verdict" "$BODY_FILE" --mode integration --previous-fingerprint "$prev"
 }
 
 # --- Case 10: integration PASS publishes with additive marker fields ---
@@ -450,32 +457,20 @@ assert_eq "case16b: nothing posted" "" "$(grep 'pr comment' "$GH_LOG" || true)"
 new_fixture
 common_stubs
 fp17="$(run_snapshot 5 6)"
-PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
-  STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
-  STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
-  STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
-  "$PUBLISH" 5 6 "$fp17" PASS "$BODY_FILE" --mode integration >/dev/null 2>"$BASE/err17.log"
+run_publish_raw 5 6 "$fp17" PASS "$BODY_FILE" --mode integration >/dev/null 2>"$BASE/err17.log"
 assert_eq "case17: --mode without --previous-fingerprint -> exit 1" 1 "$?"
 assert_contains "case17: clear error message" "$BASE/err17.log" "--previous-fingerprint"
 
 new_fixture
 common_stubs
 fp17b="$(run_snapshot 5 6)"
-PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
-  STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
-  STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
-  STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
-  "$PUBLISH" 5 6 "$fp17b" PASS "$BODY_FILE" --previous-fingerprint prevfp >/dev/null 2>"$BASE/err17b.log"
+run_publish_raw 5 6 "$fp17b" PASS "$BODY_FILE" --previous-fingerprint prevfp >/dev/null 2>"$BASE/err17b.log"
 assert_eq "case17: --previous-fingerprint without --mode -> exit 1" 1 "$?"
 
 new_fixture
 common_stubs
 fp17c="$(run_snapshot 5 6)"
-PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
-  STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
-  STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
-  STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
-  "$PUBLISH" 5 6 "$fp17c" PASS "$BODY_FILE" --mode full --previous-fingerprint prevfp >/dev/null 2>"$BASE/err17c.log"
+run_publish_raw 5 6 "$fp17c" PASS "$BODY_FILE" --mode full --previous-fingerprint prevfp >/dev/null 2>"$BASE/err17c.log"
 assert_eq "case17: unknown --mode value -> exit 1" 1 "$?"
 assert_contains "case17: names the only valid mode" "$BASE/err17c.log" "integration"
 
@@ -485,11 +480,7 @@ assert_contains "case17: names the only valid mode" "$BASE/err17c.log" "integrat
 new_fixture
 common_stubs
 fp18="$(run_snapshot 5 6)"
-PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
-  STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
-  STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
-  STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
-  "$PUBLISH" 5 6 "$fp18" PASS "$BODY_FILE" --mode "" >/dev/null 2>"$BASE/err18.log"
+run_publish_raw 5 6 "$fp18" PASS "$BODY_FILE" --mode "" >/dev/null 2>"$BASE/err18.log"
 assert_eq "case18: --mode \"\" -> exit 1, not a silent full review" 1 "$?"
 assert_contains "case18: clear error message" "$BASE/err18.log" "invalid mode"
 assert_eq "case18: nothing posted" "" "$(grep 'pr comment' "$GH_LOG" || true)"
@@ -499,11 +490,7 @@ assert_eq "case18: nothing posted" "" "$(grep 'pr comment' "$GH_LOG" || true)"
 new_fixture
 common_stubs
 fp19="$(run_snapshot 5 6)"
-PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
-  STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
-  STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
-  STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
-  "$PUBLISH" 5 6 "$fp19" PASS "$BODY_FILE" --mode integration --previous-fingerprint "" >/dev/null 2>"$BASE/err19.log"
+run_publish_raw 5 6 "$fp19" PASS "$BODY_FILE" --mode integration --previous-fingerprint "" >/dev/null 2>"$BASE/err19.log"
 assert_eq "case19: --previous-fingerprint \"\" -> exit 1" 1 "$?"
 assert_contains "case19: clear error message" "$BASE/err19.log" "invalid --previous-fingerprint"
 assert_eq "case19: nothing posted" "" "$(grep 'pr comment' "$GH_LOG" || true)"

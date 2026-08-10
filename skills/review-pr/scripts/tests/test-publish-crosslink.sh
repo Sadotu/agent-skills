@@ -4,6 +4,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CROSSLINK="$SCRIPT_DIR/../publish-crosslink.sh"
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 
 PASS=0
 FAIL=0
@@ -41,10 +42,8 @@ write_gh_shim() {
   cat > "$1" <<'SHIM'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
+if [ "${GH_TOKEN-}" != "$SENTINEL_TOKEN" ]; then exit 4; fi
 case "$1 $2" in
-  "repo view")
-    echo "${STUB_REPO:-testowner/testrepo}"
-    ;;
   "pr view")
     cat "${STUB_COMMENTS_JSON_FILE:-/dev/null}"
     ;;
@@ -77,7 +76,13 @@ new_fixture() {
   POSTED_BODY_FILE="$BASE/posted.txt"
   COMMENTS_FILE="$BASE/comments.json"
   FINDING_FILE="$BASE/finding.txt"
+  REPO_DIR="$BASE/repo"
+  APP_TOKEN_HELPER="$BASE/gh-app-token.sh"
   mkdir -p "$STUBBIN"
+  git init -q "$REPO_DIR"
+  git -C "$REPO_DIR" remote add origin https://github.com/testowner/testrepo.git
+  printf '%s\n' '#!/usr/bin/env bash' 'printf '\''%s\n'\'' "$SENTINEL_TOKEN"' > "$APP_TOKEN_HELPER"
+  chmod +x "$APP_TOKEN_HELPER"
   : > "$GH_LOG"
   echo '{"comments":[]}' > "$COMMENTS_FILE"
   echo "This PR duplicates logic also touched by PR #99." > "$FINDING_FILE"
@@ -86,9 +91,10 @@ new_fixture() {
 
 run_crosslink() {
   local target="$1" origin_pr="$2" origin_issue="$3"
-  PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
-    STUB_REPO="testowner/testrepo" STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
-    "$CROSSLINK" "$target" "$origin_pr" "$origin_issue" "$FINDING_FILE"
+  (cd "$REPO_DIR" && PATH="$STUBBIN:$PATH" GH_LOG="$GH_LOG" POSTED_BODY_FILE="$POSTED_BODY_FILE" \
+    GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" SENTINEL_TOKEN="$SENTINEL" \
+    STUB_COMMENTS_JSON_FILE="$COMMENTS_FILE" \
+    "$CROSSLINK" "$target" "$origin_pr" "$origin_issue" "$FINDING_FILE")
 }
 
 # --- Case 1: fresh cross-link posts and includes back-reference ---

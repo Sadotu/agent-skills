@@ -5,6 +5,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SNAPSHOT="$SCRIPT_DIR/../snapshot.sh"
+SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 
 PASS=0
 FAIL=0
@@ -47,10 +48,8 @@ write_gh_shim() {
   cat > "$1" <<'SHIM'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_LOG"
+if [ "${GH_TOKEN-}" != "$SENTINEL_TOKEN" ]; then exit 4; fi
 case "$1 $2" in
-  "repo view")
-    echo "${STUB_REPO:-testowner/testrepo}"
-    ;;
   "pr view")
     if [[ "$*" == *"baseRefOid"* ]]; then
       echo "unsupported pr view field: baseRefOid" >&2
@@ -83,18 +82,25 @@ SHIM
 
 run_snapshot() {
   local pr="$1" issue="$2"
-  PATH="$STUBBIN:$PATH" STUB_REPO="testowner/testrepo" \
+  (cd "$REPO_DIR" && PATH="$STUBBIN:$PATH" \
+    GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" SENTINEL_TOKEN="$SENTINEL" \
     STUB_HEAD="$STUB_HEAD" STUB_BASE="$STUB_BASE" STUB_PR_BODY="$STUB_PR_BODY" STUB_PR_UPDATED="$STUB_PR_UPDATED" \
     STUB_ISSUE_BODY="$STUB_ISSUE_BODY" STUB_ISSUE_UPDATED="$STUB_ISSUE_UPDATED" \
     GH_LOG="$GH_LOG" \
-    "$SNAPSHOT" "$pr" "$issue"
+    "$SNAPSHOT" "$pr" "$issue")
 }
 
 new_fixture() {
   BASE="$(mktemp -d)"
   TMP_DIRS+=("$BASE")
   STUBBIN="$BASE/bin"
+  REPO_DIR="$BASE/repo"
+  APP_TOKEN_HELPER="$BASE/gh-app-token.sh"
   mkdir -p "$STUBBIN"
+  git init -q "$REPO_DIR"
+  git -C "$REPO_DIR" remote add origin https://github.com/testowner/testrepo.git
+  printf '%s\n' '#!/usr/bin/env bash' 'printf '\''%s\n'\'' "$SENTINEL_TOKEN"' > "$APP_TOKEN_HELPER"
+  chmod +x "$APP_TOKEN_HELPER"
   GH_LOG="$BASE/gh.log"
   : > "$GH_LOG"
   write_gh_shim "$STUBBIN/gh"
@@ -135,14 +141,14 @@ assert_eq "case3: fingerprint changes with pr body" 1 "$([ "$fp1" != "$fp3" ] &&
 
 # --- Case 4: non-numeric pr-number is rejected cleanly ---
 new_fixture
-out4="$(PATH="$STUBBIN:$PATH" STUB_REPO="testowner/testrepo" "$SNAPSHOT" "abc" 20 2>"$BASE/err4.log")"
+out4="$(run_snapshot "abc" 20 2>"$BASE/err4.log")"
 rc4=$?
 assert_eq "case4: exits 1 on non-numeric pr-number" 1 "$rc4"
 assert_contains "case4: clear error message" "$BASE/err4.log" "invalid pr-number"
 
 # --- Case 5: non-numeric issue-number is rejected cleanly ---
 new_fixture
-out5="$(PATH="$STUBBIN:$PATH" STUB_REPO="testowner/testrepo" "$SNAPSHOT" 10 "xyz" 2>"$BASE/err5.log")"
+out5="$(run_snapshot 10 "xyz" 2>"$BASE/err5.log")"
 rc5=$?
 assert_eq "case5: exits 1 on non-numeric issue-number" 1 "$rc5"
 assert_contains "case5: clear error message" "$BASE/err5.log" "invalid issue-number"

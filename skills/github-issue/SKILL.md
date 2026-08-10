@@ -10,26 +10,22 @@ A single continuous workflow — select the issue, design, implement, verify, PR
 **Preconditions:**
 
 - **Run all phases in one shell session** so `$REPO`, `$WORKSPACE`, and the `GH` helper below persist. This harness may run each command in a fresh shell; if the shell resets, re-run the setup block before continuing.
-- **Authentication adapts to the environment.** Inside the agent devcontainer, `gh` and git push use the GitHub App (helper baked into the image). Anywhere else — a WSL host, a plain container — they use your own `gh` login; run `gh auth login` and `gh auth setup-git` once first. The `GH` helper below selects the right path automatically.
+- **GitHub App authentication is mandatory.** Never use the GitHub connector, a user PAT, `gh auth login`, or `gh auth setup-git`. If App authentication is unavailable, stop and run `/setup`.
 
 **Core principle:** the issue description is the leading input — it seeds the design work and is the spec you verify the result against. The PR opens as a draft *before* any design work, so the user reviews the whole design conversation asynchronously in the PR body rather than live.
 
-Setup — resolve the repo dynamically (never hardcode an owner/repo) and define the authenticated `gh` shorthand used throughout:
+Setup — source the fail-closed App helper used by the scripts:
 
 ```bash
-REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null \
-  || git remote get-url origin | sed -E 's#.*[:/]([^/]+/[^/.]+)(\.git)?$#\1#')"
 WORKSPACE="$(git rev-parse --show-toplevel)"
-if [ -x /opt/agent-devcontainer/gh-app-token.sh ]; then
-  # devcontainer: mint a short-lived GitHub App token per call
-  GH() { GH_TOKEN="$(GITHUB_APP_REPO=$REPO /opt/agent-devcontainer/gh-app-token.sh)" gh "$@" --repo "$REPO"; }
-else
-  # elsewhere: use your own authenticated gh (run `gh auth login` first)
-  GH() { gh "$@" --repo "$REPO"; }
-fi
+source "$WORKSPACE/skills/github-issue/scripts/lib/gh.sh"
 ```
 
-`git` push/fetch rely on whatever credential helper the environment wired — the container's App helper, or `gh auth setup-git` on a host — so no manual token is needed either way.
+Use `GIT_AUTH` for every network Git command. It forces the canonical
+`https://github.com/$REPO.git` route, mints a fresh App token, clears ambient
+credentials for that command, and supplies only the scoped `x-access-token`
+credential. Never run network `git` directly; if App token minting fails,
+stop and repair it with `/setup`.
 
 ---
 
@@ -204,7 +200,7 @@ Report production, test, and documentation line counts separately.
 **Before pushing, guard against a stale base** — a branch that has fallen behind `origin/main` produces a bloated, dangerous PR diff:
 
 ```bash
-git fetch origin
+GIT_AUTH fetch origin '+refs/heads/*:refs/remotes/origin/*'
 base=$(git merge-base origin/main HEAD)
 behind=$(git rev-list --count "$base"..origin/main)
 [ "$behind" -gt 50 ] && echo "STALE BASE: $behind commits behind origin/main — rebase before PR"
