@@ -38,6 +38,7 @@ run_triage() {
 all_clear() {
   run_triage \
     --happy-path-replayed yes \
+    --race-restart-transitions-replayed yes \
     --preserves-issue-paths yes \
     --discriminator-matches-system-change no \
     --needs-additional-state no \
@@ -56,10 +57,15 @@ assert_eq "case2: exits 2 when the happy path was not replayed" 2 "$RC"
 assert_match "case2: names the verdict" "$OUT" "DECISION-REQUIRED"
 assert_match "case2: reason mentions the success transition" "$OUT" "success transition"
 
-# --- Case 3: action breaks an issue acceptance path -> DECISION-REQUIRED ---
+# --- Case 3: named race/restart transitions not replayed -> DECISION-REQUIRED ---
+all_clear --race-restart-transitions-replayed no
+assert_eq "case3: exits 2 when race/restart transitions were not replayed" 2 "$RC"
+assert_match "case3: reason mentions race/restart transitions" "$OUT" "race/restart transitions"
+
+# --- Case 4: action breaks an issue acceptance path -> DECISION-REQUIRED ---
 all_clear --preserves-issue-paths no
-assert_eq "case3: exits 2 when an issue acceptance path is not preserved" 2 "$RC"
-assert_match "case3: reason names the acceptance path conflict" "$OUT" "acceptance path"
+assert_eq "case4: exits 2 when an issue acceptance path is not preserved" 2 "$RC"
+assert_match "case4: reason names the acceptance path conflict" "$OUT" "acceptance path"
 
 # --- Case 4: the Update Branch example — the discriminator also matches a
 # legitimate system-generated state change -> DECISION-REQUIRED ---
@@ -83,12 +89,13 @@ assert_match "case6: still prints SPLIT when other axes also fail" "$OUT" "SPLIT
 
 # --- Case 7: fail-closed on missing, empty, and non-yes/no evidence ---
 run_triage \
+  --happy-path-replayed yes \
   --preserves-issue-paths yes \
   --discriminator-matches-system-change no \
   --needs-additional-state no \
   --separately-repairable-parts no
-assert_eq "case7: exits 2 when a flag is omitted entirely" 2 "$RC"
-assert_match "case7: names the omitted flag" "$OUT" "--happy-path-replayed"
+assert_eq "case7: exits 2 when race/restart evidence is omitted entirely" 2 "$RC"
+assert_match "case7: names the omitted race/restart flag" "$OUT" "--race-restart-transitions-replayed"
 
 all_clear --happy-path-replayed ""
 assert_eq "case7: exits 2 on an empty flag value" 2 "$RC"

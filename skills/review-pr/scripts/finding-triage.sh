@@ -17,15 +17,17 @@
 #      classifier once per part.
 #   1  usage error.
 #
-# Usage: finding-triage.sh --happy-path-replayed <yes|no> --preserves-issue-paths <yes|no>
+# Usage: finding-triage.sh --happy-path-replayed <yes|no>
+#          --race-restart-transitions-replayed <yes|no> --preserves-issue-paths <yes|no>
 #          --discriminator-matches-system-change <yes|no> --needs-additional-state <yes|no>
 #          --separately-repairable-parts <yes|no>
 set -euo pipefail
 
-happy_path="" preserves_paths="" system_change="" additional_state="" separable=""
+happy_path="" race_restart="" preserves_paths="" system_change="" additional_state="" separable=""
 
 usage() {
-  echo "usage: finding-triage.sh --happy-path-replayed <yes|no> --preserves-issue-paths <yes|no> \\" >&2
+  echo "usage: finding-triage.sh --happy-path-replayed <yes|no> \\" >&2
+  echo "       --race-restart-transitions-replayed <yes|no> --preserves-issue-paths <yes|no> \\" >&2
   echo "       --discriminator-matches-system-change <yes|no> --needs-additional-state <yes|no> \\" >&2
   echo "       --separately-repairable-parts <yes|no>" >&2
   exit 1
@@ -41,6 +43,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --happy-path-replayed)
       require_value "$#" happy-path-replayed; happy_path="$2"; shift 2;;
+    --race-restart-transitions-replayed)
+      require_value "$#" race-restart-transitions-replayed; race_restart="$2"; shift 2;;
     --preserves-issue-paths)
       require_value "$#" preserves-issue-paths; preserves_paths="$2"; shift 2;;
     --discriminator-matches-system-change)
@@ -61,6 +65,7 @@ decision() { echo "DECISION-REQUIRED: $1"; exit 2; }
 # not support a confident classification. Checked before SPLIT, so a compound
 # finding with unusable evidence cannot skip the fail-closed gate.
 for pair in "happy-path-replayed:$happy_path" \
+            "race-restart-transitions-replayed:$race_restart" \
             "preserves-issue-paths:$preserves_paths" \
             "discriminator-matches-system-change:$system_change" \
             "needs-additional-state:$additional_state" \
@@ -80,6 +85,7 @@ if [ "$separable" = yes ]; then
 fi
 
 [ "$happy_path"       = yes ] || decision "the expected success transition was not replayed through the proposed action"
+[ "$race_restart"      = yes ] || decision "the named race/restart transitions were not replayed through the proposed action"
 [ "$preserves_paths"  = yes ] || decision "the proposed action does not preserve every acceptance path the linked issue requires"
 [ "$system_change"    = no  ] || decision "the proposed discriminator also matches a legitimate system-generated state change"
 [ "$additional_state" = no  ] || decision "establishing the invariant needs state or provenance the application does not record"

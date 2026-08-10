@@ -174,6 +174,7 @@ replay:
 ```bash
 scripts/finding-triage.sh \
   --happy-path-replayed                 <yes|no> \  # step 1 replayed and the success path survives
+  --race-restart-transitions-replayed   <yes|no> \  # every transition named in step 2 was replayed
   --preserves-issue-paths               <yes|no> \  # the action preserves every acceptance path the issue requires
   --discriminator-matches-system-change <yes|no> \  # step 3 found the signal also moves on system-generated change
   --needs-additional-state              <yes|no> \  # step 4 found the invariant needs unrecorded state/provenance
