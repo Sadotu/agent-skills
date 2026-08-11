@@ -6,6 +6,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRIAGE="$SCRIPT_DIR/../finding-triage.sh"
+SKILL="$SCRIPT_DIR/../../SKILL.md"
 
 PASS=0
 FAIL=0
@@ -147,6 +148,17 @@ all_clear --discriminator-matches-system-change yes --needs-additional-state yes
   --preserves-issue-paths no
 assert_eq "case9: the head-drift half requires a decision" 2 "$RC"
 assert_match "case9: the head-drift half is not presented as a repair" "$OUT" "DECISION-REQUIRED"
+
+# --- Case 10: the documented multiline invocation uses valid continuations ---
+# A shell continuation backslash must be the final byte on its line. Keep this
+# focused on the finding-triage example so prose elsewhere is irrelevant.
+DOCUMENTED_INVOCATION="$(awk '
+  /^scripts\/finding-triage\.sh / { capture=1 }
+  capture { print }
+  capture && /--separately-repairable-parts/ { exit }
+' "$SKILL")"
+BAD_CONTINUATIONS="$(printf '%s\n' "$DOCUMENTED_INVOCATION" | grep -nE '\\[[:space:]]+.' || true)"
+assert_eq "case10: documented continuation backslashes end their lines" "" "$BAD_CONTINUATIONS"
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

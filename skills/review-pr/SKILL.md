@@ -172,13 +172,19 @@ Then classify the finding — once per finding, with the evidence from the
 replay:
 
 ```bash
+# Step 1 replayed and the success path survives.
+# Every transition named in step 2 was replayed.
+# The action preserves every acceptance path the issue requires.
+# Step 3 found the signal does not move on system-generated change.
+# Step 4 found the invariant needs no unrecorded state or provenance.
+# The finding does not bundle a repairable part with one that is not.
 scripts/finding-triage.sh \
-  --happy-path-replayed                 <yes|no> \  # step 1 replayed and the success path survives
-  --race-restart-transitions-replayed   <yes|no> \  # every transition named in step 2 was replayed
-  --preserves-issue-paths               <yes|no> \  # the action preserves every acceptance path the issue requires
-  --discriminator-matches-system-change <yes|no> \  # step 3 found the signal also moves on system-generated change
-  --needs-additional-state              <yes|no> \  # step 4 found the invariant needs unrecorded state/provenance
-  --separately-repairable-parts         <yes|no>    # the finding bundles a repairable part with one that is not
+  --happy-path-replayed                 <yes|no> \
+  --race-restart-transitions-replayed   <yes|no> \
+  --preserves-issue-paths               <yes|no> \
+  --discriminator-matches-system-change <yes|no> \
+  --needs-additional-state              <yes|no> \
+  --separately-repairable-parts         <yes|no>
 ```
 
 - **`REPAIRABLE` (exit 0)** — publish it as **blocking (repairable)** with a
