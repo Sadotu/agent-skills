@@ -133,13 +133,32 @@ Do not re-raise findings about unchanged PR code unless the new base makes
 them relevant — re-litigating settled feedback is the cost this mode
 exists to avoid.
 
-Each finding: concrete evidence (file:line, quoted diff/code), impact,
-recommended action, classified **blocking** or **non-blocking**. Verdict is
-`BLOCKING` if any finding is blocking, else `PASS`.
+Each finding: concrete evidence (file:line, quoted diff/code), impact, and the
+output required by its Phase 5 label. Verdict is `BLOCKING` if any finding is
+blocking, else `PASS`.
 
 Concrete evidence implicating another open PR (named, or an
 overlapping/duplicate change you can see) — note for cross-linking in
 Phase 7.
+
+### State, timing, and race findings
+
+For findings involving state machines, reservations/leases, asynchronous or
+external completion, restart/retry, races, or drift discriminators ("reject
+when X moved"), complete this pre-publication checklist:
+
+1. Replay the expected success transition through the proposed action; the
+   happy path must still complete.
+2. Replay every named race and restart transition.
+3. Check whether the discriminator also changes through platform/application action,
+   for example Update Branch, a bot commit, or a scheduled job.
+4. Check whether the invariant needs state or provenance the application does not record.
+5. Confirm the proposed action preserves every acceptance path the issue requires.
+6. Split independently repairable behavior from parts that require a design decision.
+
+Do not publish the finding until every replay above is complete. State the
+required **invariant**, not an insufficient shortcut such as "head changed,
+therefore content drifted."
 
 ## Phase 5 — Compose the comment
 
@@ -148,6 +167,24 @@ timestamps (from Phase 2), pass number (filled in by the publish script —
 reference "pass N" once you have its output), every finding with
 evidence/impact/action, clean areas (what's fine, so a human doesn't
 re-check it), overall verdict.
+
+### Labelling findings
+
+Label every finding exactly one of:
+
+- **blocking (repairable)** — evidence, impact, and a recommended action a
+  repairer can apply mechanically.
+- **blocking (decision required)** — evidence, impact, required invariant, why
+  current state cannot establish it, which issue acceptance path the shortcut
+  breaks, and the explicit decision the user must make. **No recommended action:**
+  `address-review` would apply it literally.
+- **non-blocking** — observations, unchanged.
+
+The overall verdict is still `BLOCKING` if any finding blocks, whether
+repairable or decision-required, else `PASS`.
+
+For a split finding, identify the original finding on each separately labelled
+part.
 
 ## Phase 6 — Publish
 
@@ -210,3 +247,6 @@ scripts/publish-crosslink.sh <target-pr-number> <pr-number> <issue-number> <find
 - **Repeating ordinary correctness/style/security/test feedback** unrelated to scope/description/architectural/complexity drift — that's other reviewers' job.
 - **Speculative cross-linking.** Only cross-link with concrete evidence, never a guess that another PR "might" be relevant.
 - **Publishing an integration pass without a resolved prior `PASS`.** Exit 5 from either script means run a full review — never fall back to posting an unverified integration comment, and never hand-pick a "close enough" prior marker.
+- **Publishing a state/timing/race finding without completing the pre-publication checklist.** The replay is the point — a discriminator that also fires on Update Branch reads exactly like a valid repair until you replay the happy path through it.
+- **Presenting a decision-required finding as a repair, or dropping it.** It stays blocking; it just names the invariant and the decision instead of an action.
+- **Publishing a compound finding under one label.** If only part of it is mechanically repairable, split it — the repairable half must not be held hostage by the open decision.

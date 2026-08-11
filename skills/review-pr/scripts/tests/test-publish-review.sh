@@ -495,5 +495,42 @@ assert_eq "case19: --previous-fingerprint \"\" -> exit 1" 1 "$?"
 assert_contains "case19: clear error message" "$BASE/err19.log" "invalid --previous-fingerprint"
 assert_eq "case19: nothing posted" "" "$(grep 'pr comment' "$GH_LOG" || true)"
 
+# --- Case 20: GitHub Update Branch moves head AND base with both bodies
+# unchanged. The base update is a system operation, not an author edit, but
+# it changes the same head field used to detect external drift — so it must
+# be indistinguishable from an author push: the same STALE exit 3 on the
+# same code path. This is why "the head changed" carries no provenance and
+# cannot, on its own, discriminate external drift. ---
+new_fixture
+STUB_HEAD="1111111111111111111111111111111111111111" STUB_BASE="2222222222222222222222222222222222222222"
+STUB_PR_BODY="pr text" STUB_PR_UPDATED="2026-08-01T00:00:00Z"
+STUB_ISSUE_BODY="issue text" STUB_ISSUE_UPDATED="2026-07-31T00:00:00Z"
+fp20_before="$(run_snapshot 5 6)"
+
+new_fixture
+# Update Branch result: a new merge commit as head, base advanced to the
+# current main. Both bodies are byte-identical to the reserved snapshot.
+STUB_HEAD="3333333333333333333333333333333333333333" STUB_BASE="4444444444444444444444444444444444444444"
+STUB_PR_BODY="pr text" STUB_PR_UPDATED="2026-08-02T00:00:00Z"
+STUB_ISSUE_BODY="issue text" STUB_ISSUE_UPDATED="2026-07-31T00:00:00Z"
+out20="$(run_publish 5 6 "$fp20_before" PASS 2>"$BASE/err20.log")"
+assert_eq "case20: Update Branch (head+base moved, bodies unchanged) -> stale (exit 3)" 3 "$?"
+assert_eq "case20: nothing posted when the base update invalidates the snapshot" "" "$out20"
+assert_contains "case20: reported as STALE, the same path an author push takes" "$BASE/err20.log" "STALE"
+assert_eq "case20: gh pr comment never called" "" "$(grep 'pr comment' "$GH_LOG" || true)"
+
+# --- Case 21: the post-Update-Branch state is publishable once recaptured,
+# and the marker records the post-update head/base. A base update is not
+# itself a finding — it is a new snapshot. ---
+fp20_after="$(run_snapshot 5 6)"
+assert_eq "case21: the base update produced a different fingerprint" 1 \
+  "$([ "$fp20_before" != "$fp20_after" ] && echo 1 || echo 0)"
+out21="$(run_publish 5 6 "$fp20_after" PASS 2>"$BASE/err21.log")"
+assert_eq "case21: exits 0 once the snapshot is recaptured" 0 "$?"
+assert_eq "case21: marker records the post-update head" \
+  "3333333333333333333333333333333333333333" "$(printf '%s' "$out21" | jq -r .head)"
+assert_eq "case21: marker records the post-update base" \
+  "4444444444444444444444444444444444444444" "$(printf '%s' "$out21" | jq -r .base)"
+
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
