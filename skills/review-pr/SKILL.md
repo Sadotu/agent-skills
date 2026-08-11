@@ -145,43 +145,20 @@ Phase 7.
 
 For findings involving state machines, reservations/leases, asynchronous or
 external completion, restart/retry, races, or drift discriminators ("reject
-when X moved"), replay before classifying:
+when X moved"), complete this pre-publication checklist:
 
-1. The expected success transition through the proposed action; the happy
-   path must still complete.
-2. Every named race and restart transition.
-3. Whether the discriminator also changes through platform/application action
-   (for example Update Branch, a bot commit, or a scheduled job).
-4. Whether the required invariant needs state or provenance the application
-   does not record.
+1. Replay the expected success transition through the proposed action; the
+   happy path must still complete.
+2. Replay every named race and restart transition.
+3. Check whether the discriminator also changes through platform/application action,
+   for example Update Branch, a bot commit, or a scheduled job.
+4. Check whether the invariant needs state or provenance the application does not record.
+5. Confirm the proposed action preserves every acceptance path the issue requires.
+6. Split independently repairable behavior from parts that require a design decision.
 
-The proposed action must preserve every acceptance path the issue requires.
-State the required **invariant**, not an insufficient shortcut such as "head
-changed, therefore content drifted." Classify each finding from the replay:
-
-```bash
-scripts/finding-triage.sh \
-  --happy-path-replayed                 <yes|no> \
-  --race-restart-transitions-replayed   <yes|no> \
-  --preserves-issue-paths               <yes|no> \
-  --discriminator-matches-system-change <yes|no> \
-  --needs-additional-state              <yes|no> \
-  --separately-repairable-parts         <yes|no>
-```
-
-- **`REPAIRABLE` (exit 0):** publish **blocking (repairable)** with a concrete
-  action.
-- **`SPLIT` (exit 3):** split separable parts, classify each again, and publish
-  each under its own label.
-- **`DECISION-REQUIRED` (exit 2):** publish **blocking (decision required)**
-  per Phase 5; neither turn it into a repair nor drop it.
-- **`ANALYSIS-INCOMPLETE` (exit 4):** do not publish; complete the replay or
-  correct unusable evidence, then classify again.
-- **Exit 1** — usage error. Fix the invocation.
-
-The classifier is read-only and fail-closed: missing/unusable evidence or a
-required replay marked `no` is `ANALYSIS-INCOMPLETE`; only an evidenced
-invariant/design conflict is `DECISION-REQUIRED`.
+Do not publish the finding until every replay above is complete. State the
+required **invariant**, not an insufficient shortcut such as "head changed,
+therefore content drifted."
 
 ## Phase 5 — Compose the comment
 
@@ -206,7 +183,8 @@ Label every finding exactly one of:
 The overall verdict is still `BLOCKING` if any finding blocks, whether
 repairable or decision-required, else `PASS`.
 
-For `SPLIT`, identify the original finding on each separately labelled part.
+For a split finding, identify the original finding on each separately labelled
+part.
 
 ## Phase 6 — Publish
 
@@ -269,6 +247,6 @@ scripts/publish-crosslink.sh <target-pr-number> <pr-number> <issue-number> <find
 - **Repeating ordinary correctness/style/security/test feedback** unrelated to scope/description/architectural/complexity drift — that's other reviewers' job.
 - **Speculative cross-linking.** Only cross-link with concrete evidence, never a guess that another PR "might" be relevant.
 - **Publishing an integration pass without a resolved prior `PASS`.** Exit 5 from either script means run a full review — never fall back to posting an unverified integration comment, and never hand-pick a "close enough" prior marker.
-- **Publishing a state/timing/race finding without running `finding-triage.sh`.** The replay is the point — a discriminator that also fires on Update Branch reads exactly like a valid repair until you replay the happy path through it.
-- **Presenting a `DECISION-REQUIRED` finding as a repair, or dropping it.** It stays blocking; it just names the invariant and the decision instead of an action.
+- **Publishing a state/timing/race finding without completing the pre-publication checklist.** The replay is the point — a discriminator that also fires on Update Branch reads exactly like a valid repair until you replay the happy path through it.
+- **Presenting a decision-required finding as a repair, or dropping it.** It stays blocking; it just names the invariant and the decision instead of an action.
 - **Publishing a compound finding under one label.** If only part of it is mechanically repairable, split it — the repairable half must not be held hostage by the open decision.
