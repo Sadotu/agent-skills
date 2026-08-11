@@ -195,12 +195,16 @@ scripts/finding-triage.sh \
 - **`DECISION-REQUIRED` (exit 2)** — publish it as **blocking (decision
   required)**, per Phase 5. Do not soften it into a repair, and do not drop
   it.
+- **`ANALYSIS-INCOMPLETE` (exit 4)** — do not publish the finding. Complete
+  the missing replay or correct the unusable evidence, then re-run the
+  classifier.
 - **Exit 1** — usage error. Fix the invocation.
 
-It is fail-closed: missing or unusable evidence returns
-`DECISION-REQUIRED`, never `REPAIRABLE`. It reads nothing and mutates
-nothing — every judgment is still yours; it only enforces which combination
-of judgments may be published as a repair.
+It is fail-closed: missing or unusable evidence, or a required replay marked
+`no`, returns `ANALYSIS-INCOMPLETE`, never a publishable finding. Only evidence
+of an actual invariant or design conflict returns `DECISION-REQUIRED`. It reads
+nothing and mutates nothing — every judgment is still yours; it only enforces
+which combination of judgments may be published as a repair or decision.
 
 ## Phase 5 — Compose the comment
 

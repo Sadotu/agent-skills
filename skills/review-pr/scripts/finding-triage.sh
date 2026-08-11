@@ -2,10 +2,11 @@
 # Pure classifier for one review-pr finding about state, timing, or races.
 #
 # Turns already-gathered evidence about ONE finding into a
-# REPAIRABLE / DECISION-REQUIRED / SPLIT verdict. It reads nothing, runs
+# REPAIRABLE / DECISION-REQUIRED / SPLIT verdict, or refuses incomplete
+# analysis. It reads nothing, runs
 # nothing, and mutates nothing — it neither inspects the PR nor publishes
-# anything. Fail-closed: missing or unusable evidence yields
-# DECISION-REQUIRED, never REPAIRABLE.
+# anything. Fail-closed: missing, unusable, or incomplete replay evidence
+# yields ANALYSIS-INCOMPLETE, which must not be published.
 #
 # Exit codes:
 #   0  REPAIRABLE — publish it as a blocking (repairable) finding with a
@@ -15,6 +16,8 @@
 #      recommended action.
 #   3  SPLIT — the finding bundles separable parts; split it and re-run this
 #      classifier once per part.
+#   4  ANALYSIS-INCOMPLETE — do not publish the finding; complete or correct
+#      the required replay, then re-run this classifier.
 #   1  usage error.
 #
 # Usage: finding-triage.sh --happy-path-replayed <yes|no>
@@ -59,11 +62,12 @@ while [ "$#" -gt 0 ]; do
 done
 
 decision() { echo "DECISION-REQUIRED: $1"; exit 2; }
+incomplete() { echo "ANALYSIS-INCOMPLETE: $1; complete or correct the analysis before publication"; exit 4; }
 
 # Fail-closed: every flag must be exactly yes or no. An unusable flag is a
-# refusal, not a usage error — the reviewer did supply evidence, it just does
-# not support a confident classification. Checked before SPLIT, so a compound
-# finding with unusable evidence cannot skip the fail-closed gate.
+# refusal, not a product decision — the reviewer did supply evidence, but must
+# correct it before classification. Checked before SPLIT, so a compound finding
+# with unusable evidence cannot skip the fail-closed gate.
 for pair in "happy-path-replayed:$happy_path" \
             "race-restart-transitions-replayed:$race_restart" \
             "preserves-issue-paths:$preserves_paths" \
@@ -73,7 +77,7 @@ for pair in "happy-path-replayed:$happy_path" \
   name="${pair%%:*}" val="${pair#*:}"
   case "$val" in
     yes|no) ;;
-    *) decision "evidence for --$name is missing or not yes/no; cannot classify confidently";;
+    *) incomplete "evidence for --$name is missing or not yes/no";;
   esac
 done
 
@@ -84,8 +88,8 @@ if [ "$separable" = yes ]; then
   exit 3
 fi
 
-[ "$happy_path"       = yes ] || decision "the expected success transition was not replayed through the proposed action"
-[ "$race_restart"      = yes ] || decision "the named race/restart transitions were not replayed through the proposed action"
+[ "$happy_path"       = yes ] || incomplete "the expected success transition was not replayed through the proposed action"
+[ "$race_restart"      = yes ] || incomplete "the named race/restart transitions were not replayed through the proposed action"
 [ "$preserves_paths"  = yes ] || decision "the proposed action does not preserve every acceptance path the linked issue requires"
 [ "$system_change"    = no  ] || decision "the proposed discriminator also matches a legitimate system-generated state change"
 [ "$additional_state" = no  ] || decision "establishing the invariant needs state or provenance the application does not record"

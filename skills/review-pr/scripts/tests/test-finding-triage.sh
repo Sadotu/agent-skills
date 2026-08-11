@@ -52,15 +52,16 @@ all_clear
 assert_eq "case1: exits 0 when every axis clears" 0 "$RC"
 assert_eq "case1: prints REPAIRABLE" "REPAIRABLE" "$OUT"
 
-# --- Case 2: happy path not replayed -> DECISION-REQUIRED ---
+# --- Case 2: happy path not replayed -> ANALYSIS-INCOMPLETE ---
 all_clear --happy-path-replayed no
-assert_eq "case2: exits 2 when the happy path was not replayed" 2 "$RC"
-assert_match "case2: names the verdict" "$OUT" "DECISION-REQUIRED"
+assert_eq "case2: exits 4 when the happy path was not replayed" 4 "$RC"
+assert_match "case2: names the refusal" "$OUT" "ANALYSIS-INCOMPLETE"
 assert_match "case2: reason mentions the success transition" "$OUT" "success transition"
 
-# --- Case 3: named race/restart transitions not replayed -> DECISION-REQUIRED ---
+# --- Case 3: named race/restart transitions not replayed -> ANALYSIS-INCOMPLETE ---
 all_clear --race-restart-transitions-replayed no
-assert_eq "case3: exits 2 when race/restart transitions were not replayed" 2 "$RC"
+assert_eq "case3: exits 4 when race/restart transitions were not replayed" 4 "$RC"
+assert_match "case3: names the refusal" "$OUT" "ANALYSIS-INCOMPLETE"
 assert_match "case3: reason mentions race/restart transitions" "$OUT" "race/restart transitions"
 
 # --- Case 4: action breaks an issue acceptance path -> DECISION-REQUIRED ---
@@ -88,32 +89,32 @@ all_clear --separately-repairable-parts yes --discriminator-matches-system-chang
 assert_eq "case6: SPLIT is decided before DECISION-REQUIRED" 3 "$RC"
 assert_match "case6: still prints SPLIT when other axes also fail" "$OUT" "SPLIT"
 
-# --- Case 7: fail-closed on missing, empty, and non-yes/no evidence ---
+# --- Case 7: incomplete or unusable evidence refuses publication ---
 run_triage \
   --happy-path-replayed yes \
   --preserves-issue-paths yes \
   --discriminator-matches-system-change no \
   --needs-additional-state no \
   --separately-repairable-parts no
-assert_eq "case7: exits 2 when race/restart evidence is omitted entirely" 2 "$RC"
+assert_eq "case7: exits 4 when race/restart evidence is omitted entirely" 4 "$RC"
 assert_match "case7: names the omitted race/restart flag" "$OUT" "--race-restart-transitions-replayed"
 
 all_clear --happy-path-replayed ""
-assert_eq "case7: exits 2 on an empty flag value" 2 "$RC"
-assert_match "case7: empty value is not treated as no" "$OUT" "DECISION-REQUIRED"
+assert_eq "case7: exits 4 on an empty flag value" 4 "$RC"
+assert_match "case7: empty value is not treated as no" "$OUT" "ANALYSIS-INCOMPLETE"
 
 all_clear --needs-additional-state maybe
-assert_eq "case7: exits 2 on a non-yes/no value" 2 "$RC"
+assert_eq "case7: exits 4 on a non-yes/no value" 4 "$RC"
 assert_match "case7: names the unusable flag" "$OUT" "--needs-additional-state"
 
 all_clear --happy-path-replayed YES
-assert_eq "case7: exits 2 on a differently-cased value" 2 "$RC"
+assert_eq "case7: exits 4 on a differently-cased value" 4 "$RC"
 
 # A compound finding whose other evidence is unusable still fails closed:
 # SPLIT is only reached once every flag is a usable yes/no.
 run_triage --separately-repairable-parts yes
-assert_eq "case7: unusable evidence outranks SPLIT" 2 "$RC"
-assert_match "case7: unusable evidence reports DECISION-REQUIRED" "$OUT" "DECISION-REQUIRED"
+assert_eq "case7: unusable evidence outranks SPLIT" 4 "$RC"
+assert_match "case7: unusable evidence reports ANALYSIS-INCOMPLETE" "$OUT" "ANALYSIS-INCOMPLETE"
 
 # --- Case 8: usage errors are exit 1, distinct from a refusal ---
 run_triage --not-a-flag yes
