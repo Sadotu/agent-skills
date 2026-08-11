@@ -133,9 +133,9 @@ Do not re-raise findings about unchanged PR code unless the new base makes
 them relevant — re-litigating settled feedback is the cost this mode
 exists to avoid.
 
-Each finding: concrete evidence (file:line, quoted diff/code), impact,
-recommended action, classified **blocking** or **non-blocking**. Verdict is
-`BLOCKING` if any finding is blocking, else `PASS`.
+Each finding: concrete evidence (file:line, quoted diff/code), impact, and the
+output required by its Phase 5 label. Verdict is `BLOCKING` if any finding is
+blocking, else `PASS`.
 
 Concrete evidence implicating another open PR (named, or an
 overlapping/duplicate change you can see) — note for cross-linking in
