@@ -143,41 +143,23 @@ Phase 7.
 
 ### State, timing, and race findings
 
-Apply this subsection to any finding that touches a state machine, a
-reservation or lease, an asynchronous or externally-completed operation, a
-restart/retry path, or a race — and to **any** finding whose recommended
-action is a drift discriminator ("treat X as changed", "reject when Y
-moved"). These are the findings that read as mechanically actionable while
-actually resting on an unmade design decision.
+For findings involving state machines, reservations/leases, asynchronous or
+external completion, restart/retry, races, or drift discriminators ("reject
+when X moved"), replay before classifying:
 
-Before classifying such a finding, replay it:
+1. The expected success transition through the proposed action; the happy
+   path must still complete.
+2. Every named race and restart transition.
+3. Whether the discriminator also changes through platform/application action
+   (for example Update Branch, a bot commit, or a scheduled job).
+4. Whether the required invariant needs state or provenance the application
+   does not record.
 
-1. **Replay the expected success transition** through the proposed action.
-   Does the normal happy path still complete?
-2. **Replay each named race and restart transition** through the proposed
-   action.
-3. **Check the discriminator against system-generated change.** Does the
-   signal the action keys on also move when the platform or the application
-   itself acts — Update Branch changing the PR head, a bot committing, a
-   scheduled job touching the record?
-4. **Check what establishing the invariant costs.** Does it need state or
-   provenance the application does not currently record?
-
-State the required **invariant**, never a shortcut that is insufficient to
-establish it. "Head changed, therefore content drifted" is a shortcut;
-"integration review may launch only once the observed head is proven to be
-the requested base update" is the invariant.
-
-Then classify the finding — once per finding, with the evidence from the
-replay:
+The proposed action must preserve every acceptance path the issue requires.
+State the required **invariant**, not an insufficient shortcut such as "head
+changed, therefore content drifted." Classify each finding from the replay:
 
 ```bash
-# Step 1 replayed and the success path survives.
-# Every transition named in step 2 was replayed.
-# The action preserves every acceptance path the issue requires.
-# Step 3 found the signal does not move on system-generated change.
-# Step 4 found the invariant needs no unrecorded state or provenance.
-# The finding does not bundle a repairable part with one that is not.
 scripts/finding-triage.sh \
   --happy-path-replayed                 <yes|no> \
   --race-restart-transitions-replayed   <yes|no> \
@@ -187,24 +169,19 @@ scripts/finding-triage.sh \
   --separately-repairable-parts         <yes|no>
 ```
 
-- **`REPAIRABLE` (exit 0)** — publish it as **blocking (repairable)** with a
-  concrete recommended action.
-- **`SPLIT` (exit 3)** — split the finding into its separable parts and
-  re-run the classifier once per part. Publish each part under its own
-  verdict; a compound finding never gets one label.
-- **`DECISION-REQUIRED` (exit 2)** — publish it as **blocking (decision
-  required)**, per Phase 5. Do not soften it into a repair, and do not drop
-  it.
-- **`ANALYSIS-INCOMPLETE` (exit 4)** — do not publish the finding. Complete
-  the missing replay or correct the unusable evidence, then re-run the
-  classifier.
+- **`REPAIRABLE` (exit 0):** publish **blocking (repairable)** with a concrete
+  action.
+- **`SPLIT` (exit 3):** split separable parts, classify each again, and publish
+  each under its own label.
+- **`DECISION-REQUIRED` (exit 2):** publish **blocking (decision required)**
+  per Phase 5; neither turn it into a repair nor drop it.
+- **`ANALYSIS-INCOMPLETE` (exit 4):** do not publish; complete the replay or
+  correct unusable evidence, then classify again.
 - **Exit 1** — usage error. Fix the invocation.
 
-It is fail-closed: missing or unusable evidence, or a required replay marked
-`no`, returns `ANALYSIS-INCOMPLETE`, never a publishable finding. Only evidence
-of an actual invariant or design conflict returns `DECISION-REQUIRED`. It reads
-nothing and mutates nothing — every judgment is still yours; it only enforces
-which combination of judgments may be published as a repair or decision.
+The classifier is read-only and fail-closed: missing/unusable evidence or a
+required replay marked `no` is `ANALYSIS-INCOMPLETE`; only an evidenced
+invariant/design conflict is `DECISION-REQUIRED`.
 
 ## Phase 5 — Compose the comment
 
@@ -216,24 +193,20 @@ re-check it), overall verdict.
 
 ### Labelling findings
 
-Label every finding as exactly one of:
+Label every finding exactly one of:
 
 - **blocking (repairable)** — evidence, impact, and a recommended action a
   repairer can apply mechanically.
-- **blocking (decision required)** — evidence, impact, the required
-  invariant, why the current application state cannot establish it, the
-  issue acceptance path that the obvious shortcut would break, and the
-  explicit decision the user must make. **Write no recommended action.**
-  `address-review` repairs recommended actions; a decision-required finding
-  that carries one gets applied literally and breaks the acceptance path.
+- **blocking (decision required)** — evidence, impact, required invariant, why
+  current state cannot establish it, which issue acceptance path the shortcut
+  breaks, and the explicit decision the user must make. **No recommended action:**
+  `address-review` would apply it literally.
 - **non-blocking** — observations, unchanged.
 
 The overall verdict is still `BLOCKING` if any finding blocks, whether
 repairable or decision-required, else `PASS`.
 
-When a finding was split under `SPLIT`, publish each part as its own
-labelled finding and say which original finding they came from, so the
-repairable parts can be actioned while the decision is still open.
+For `SPLIT`, identify the original finding on each separately labelled part.
 
 ## Phase 6 — Publish
 
