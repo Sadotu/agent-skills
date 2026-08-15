@@ -53,7 +53,7 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 
 **CRITICAL — synchronize before writing or committing issue work.** `git fetch` updates `origin/main`, not local `main`. Committing in the primary worktree before isolation pollutes local `main` and makes it diverge.
 
-`scripts/isolate.sh` syncs the primary worktree with `origin/main`, isolates issue work into its own worktree and branch, and opens the draft PR — all before any issue commit happens. It guarantees issue work is never committed onto a dirty or diverged `main`: on any guard failure it exits nonzero without mutating the primary worktree, preserving user work so you can report the exact condition and ask for direction. Use a 3–5 word kebab-case slug. From here on, run all writes, commits, tests, and Git commands in `<worktree-path>` unless a command explicitly inspects the primary worktree. Convention: `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`; pass an optional 5th `base-ref` arg (e.g. `origin/agent/82-other-issue`) when this issue's work must stack on another in-flight branch instead of `origin/main`.
+`scripts/isolate.sh` syncs the primary worktree with `origin/main`, isolates issue work into its own worktree and branch, and opens the draft PR — all before any issue commit. On any guard failure it exits nonzero without mutating the primary worktree, so issue work is never committed onto a dirty or diverged `main`: report the exact condition and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. From here on, run every write, commit, test, and Git command in `<worktree-path>` unless it explicitly inspects the primary worktree. Pass an optional 5th `base-ref` arg (e.g. `origin/agent/82-other-issue`) when this issue's work must stack on another in-flight branch instead of `origin/main`.
 
 ```bash
 scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
@@ -63,17 +63,17 @@ Report the PR URL to the user now — it is the first thing they see, before any
 
 ### Dirty-tree triage (read-only, when the guard trips)
 
-If `scripts/isolate.sh` exits nonzero, check both `git branch --show-current` and `git status --porcelain` in the primary worktree yourself — if you're on `main` and porcelain is nonempty, the dirty-primary-tree guard is what tripped: the wrong-branch guard runs first and would have failed there instead, and the diverged-`main` guards run after the dirty-tree check so they're unreachable while the tree is still dirty. When it's the dirty-tree guard:
+If `scripts/isolate.sh` exits nonzero, check `git branch --show-current` and `git status --porcelain` in the primary worktree: on `main` with nonempty porcelain, the dirty-tree guard is what tripped — the wrong-branch guard runs before it, the diverged-`main` guards after. When it's the dirty-tree guard:
 
 ```bash
 scripts/diagnose-dirty-main.sh
 ```
 
-This is read-only — it never stashes, resets, or cleans anything. It runs a separate `git status --porcelain --ignored` to break the tree into staged changes (via `git diff --cached --name-status`), unstaged changes to already-tracked files (via `git diff --name-status`), genuinely untracked paths, and already-ignored paths, then runs `git check-ignore -v` per untracked entry to tell "genuinely untracked scaffold `.gitignore` doesn't cover yet" apart from "should already be ignored but isn't on this checkout." Report this breakdown to the user and ask for direction — the pre-existing state on primary `main` is not the current issue's to resolve, so do not stash, reset, or clean it away just to get past the guard.
+This is read-only — it never stashes, resets, or cleans. It breaks the tree into staged changes, unstaged changes to tracked files, genuinely untracked paths, and already-ignored paths, and reports per untracked entry whether `.gitignore` should already have covered it. Report that breakdown to the user and ask for direction — pre-existing state on primary `main` is not this issue's to resolve, so never stash, reset, or clean it away to get past the guard.
 
 ### Baseline-failure triage (unattended override)
 
-`superpowers:using-git-worktrees` verifies a clean test baseline after isolation and, on failure, says to report and ask before proceeding. This workflow runs unattended, so — **for unattended `github-issue` runs only** — it overrides that gate with a narrow, evidence-based procedure. The upstream skill is unchanged; interactive users keep its report-and-ask default. No failure is ever silently ignored, suppressed, excluded, weakened, or dropped from final verification.
+`superpowers:using-git-worktrees` says to report and ask when the post-isolation baseline fails. **For unattended `github-issue` runs only**, this narrow evidence-based procedure overrides that gate; the upstream skill is unchanged, and interactive users keep its default. No failure is ever silently ignored, suppressed, excluded, weakened, or dropped from final verification.
 
 When the isolated worktree's baseline verification fails, classify **each** failing test independently:
 
@@ -92,11 +92,11 @@ When the isolated worktree's baseline verification fails, classify **each** fail
      --ambiguous          <yes|no>    # flaky/timeout/environmental/global-setup/unclassifiable
    ```
 
-   It prints `CONTINUE` (exit 0) only when the failure provably reproduces on untouched `origin/main` and is unrelated on every axis; otherwise `STOP: <reason>` (exit 2). It is fail-closed — missing or unclear evidence stops. Continue the run **only if every** failure returns `CONTINUE`; a single `STOP` stops the run, and you report each classification and ask for direction. One safely classified failure never lets an unrelated or ambiguous one through.
+   It prints `CONTINUE` (exit 0) only when the failure provably reproduces on untouched `origin/main` and is unrelated on every axis; otherwise `STOP: <reason>` (exit 2). It is fail-closed — missing or unclear evidence stops. Continue **only if every** failure returns `CONTINUE`; one `STOP` stops the run, and you report each classification and ask for direction.
 
 6. For every accepted (`CONTINUE`) failure, add an `Accepted baseline failure` section to the draft PR recording: the command, the exact test, bounded relevant output, the `origin/main` SHA and the issue-branch SHA, the implicated files, the change-surface comparison, and the classifier verdict with rationale. Redact secrets without hiding diagnostic facts; link an artifact if the output is too large.
 
-The classifier only reads evidence — it never runs, excludes, or alters a test. You still supply every judgment; it enforces only the go/no-go combination so an unattended run cannot rationalize past it.
+The classifier only reads evidence — it never runs, excludes, or alters a test, and you still supply every judgment. It enforces only the go/no-go combination, so an unattended run cannot rationalize past it.
 
 ---
 
@@ -127,7 +127,7 @@ EOF
 )"
 ```
 
-Derive **Problem** from the issue and **Approach** from the chosen design; both must be specific, not boilerplate. **Problem** states observable application/user-facing pain — what someone hits — without naming the fix; no implementation nouns. **Approach** states the behavior-level solution in minimal implementation jargon and names deliberate non-goals (what this PR intentionally does not do). Phase 6 updates **Approach** if the implementation differs. The PR body is the asynchronous record of the design conversation. Then use `superpowers:writing-plans` to produce the plan.
+Both must be specific, not boilerplate. **Problem** states observable user-facing pain — what someone hits — without naming the fix or using implementation nouns. **Approach** states the behavior-level solution in minimal jargon and names deliberate non-goals; Phase 6 updates it if the implementation differs. The PR body is the asynchronous record of the design conversation. Then use `superpowers:writing-plans` to produce the plan.
 
 Write two artifacts inside `<worktree-path>` as **session-local working files** — the plan drives Phase 4, the design records the decisions. They must **not** land in the PR diff, so Git-exclude them before writing (Phase 7 deletes them with the worktree):
 
@@ -165,7 +165,7 @@ The plan must record the issue number and URL, the original acceptance criteria,
 
 **REQUIRED SUB-SKILL:** Use `superpowers:subagent-driven-development`.
 
-Execute the plan task by task with fresh subagents and the skill's review stages when subagent tools are available (discover deferred tools with `tool_search` if needed). If subagent tools are unavailable, say so and execute directly while preserving the same task boundaries, test-first discipline, and review checkpoints — do not silently omit review.
+Execute the plan task by task with fresh subagents and the skill's review stages when subagent tools are available (discover deferred tools with `tool_search` if needed). If they are unavailable, say so and execute directly, preserving the same task boundaries, test-first discipline, and review checkpoints — never silently omit review.
 
 Follow `superpowers:test-driven-development` for every behavior change unless the user explicitly approves an exception.
 
@@ -185,7 +185,7 @@ GH issue view <number>
 
 Do not claim completion from prior output, expected behavior, or a passing subset that does not cover the requested outcome.
 
-**Re-check every accepted baseline failure.** For each `Accepted baseline failure` recorded in the PR, re-run its recorded command and re-invoke `scripts/baseline-triage.sh` — set `--branch-worsened yes` if the output, failing assertions, or exit/timing behavior changed from the recorded baseline. If any accepted failure now regresses, or the actual implementation expanded the change surface so `--overlaps-surface` is now `yes`, stop, do **not** mark the PR ready, and report. Otherwise preserve the confirmed-unchanged evidence in the PR verification summary. Never convert, suppress, or exclude a failure to finish.
+**Re-check every accepted baseline failure.** For each one recorded in the PR, re-run its command and re-invoke `scripts/baseline-triage.sh`, setting `--branch-worsened yes` if the output, failing assertions, or exit/timing behavior changed from the recorded baseline. If any now regresses, or the implementation expanded the change surface so `--overlaps-surface` is now `yes`, stop, do **not** mark the PR ready, and report. Otherwise preserve the confirmed-unchanged evidence in the PR verification summary. Never convert, suppress, or exclude a failure to finish.
 
 **Before finalizing, ensure the full diff is the simplest solution that satisfies the issue.**
 
@@ -197,7 +197,7 @@ Report production, test, and documentation line counts separately.
 
 **REQUIRED SUB-SKILL:** Use `superpowers:finishing-a-development-branch`.
 
-**Before pushing, guard against a stale base** — a branch that has fallen behind `origin/main` produces a bloated, dangerous PR diff:
+**Before pushing, guard against a stale base** — a branch far behind `origin/main` produces a bloated, dangerous PR diff:
 
 ```bash
 GIT_AUTH fetch origin '+refs/heads/*:refs/remotes/origin/*'
@@ -212,8 +212,8 @@ If stale, `git rebase origin/main` (resolve conflicts, drop already-merged commi
 
 - Push the final commits to the existing branch.
 - Update the existing PR body: make the Summary's **Approach** match the actual diff, then append verification results against the acceptance criteria below Design Decisions. Preserve the single `Closes #<number>` line and Summary block. Because the spec and plan are session-local, do not link their paths.
-- Hand off: `scripts/finish-handoff.sh <pr-number> <number>`. This marks the PR ready for the repository owner on both manual and managed runs. `issue-orchestrator` owns the `agent-running` label while a managed implementation is active and releases it after observing the ready PR. No automated review, repair, approval, or merge phase is started.
-- Report which path it took (its stderr output says so) alongside the branch name and PR URL.
+- Hand off: `scripts/finish-handoff.sh <pr-number> <number>`. It marks the PR ready for the repository owner on both manual and managed runs, and starts no automated review, repair, approval, or merge phase.
+- Report its stderr line alongside the branch name and PR URL.
 
 Do not merge unless the user explicitly requests it.
 Approval and merge remain explicit repository-owner actions.
@@ -224,24 +224,45 @@ Approval and merge remain explicit repository-owner actions.
 
 Run this phase when the user reports the PR merged or authenticated GitHub state reports `MERGED`. Never treat a merely closed PR as merged.
 
-`scripts/cleanup-merged.sh` only ever cleans up once the PR is `MERGED`, its branch is under `agent/*`, that branch has actually landed in `origin/main` — as a true merge commit, or proven via `git patch-id` equivalence for a squash merge; rebase merges stop and ask, since the PR's merge commit is only the last replayed commit and can never patch-match the whole feature — and its worktree is clean. It deletes only the two manifest-recorded session artifacts after confirming they are ignored and untracked. Matching tracked documents are preserved; an unrecorded matching file stops cleanup with an actionable report.
+`scripts/cleanup-merged.sh` is the canonical Phase 7 cleanup for a manual run and for any unattended caller. Run it directly:
 
 ```bash
 scripts/cleanup-merged.sh <pr-number> <issue-number>
 ```
 
-Never use forced worktree removal, reset, clean, or force-push during post-merge cleanup. `git branch -D` only via the proven-squash path in `cleanup-merged.sh` (PR `MERGED` + `agent/*` + merge commit in `origin/main` + patch-id equivalence + clean worktree); never by hand. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
+It cleans up only once the PR is `MERGED`, its branch is under `agent/*`, that branch has actually landed in `origin/main` — as a true merge commit, or proven via `git patch-id` equivalence for a squash merge; rebase merges stop and ask, since the PR's merge commit is only the last replayed commit and can never patch-match the whole feature — and its worktree is clean. It deletes only the two manifest-recorded session artifacts after confirming they are ignored and untracked; matching tracked documents are preserved, and an unrecorded matching file stops cleanup with an actionable report.
+
+Every knowable guard is evaluated before the first mutation, and each step is journaled at `$(git rev-parse --git-common-dir)/github-issue/cleanup/pr-<pr-number>.state` — the intent (`attempted=`) before the mutation, the completion (`done=`) after it — so a crash in between still converges on the next run. A missing worktree, local branch, or recorded artifact is accepted **only** when that journal proves this workflow removed it; otherwise cleanup stops and asks.
+
+The merge proof covers one commit, so nothing is deleted without re-verifying the tip: the local branch must still equal the proven SHA (else `branch-advanced`), origin's branch must too (else `remote-branch-advanced`), and since the earlier read goes stale during removal, the deletion itself carries that expected tip as a lease, so origin rejects it if the ref moved (also `remote-branch-advanced`). Work pushed or committed after the proof is preserved, never deleted.
+
+Every run writes exactly one JSON record to stdout and keeps human diagnostics on stderr, so an unattended caller never parses free-form text:
+
+```json
+{"status":"cleaned","pr":"40","issue":"28","branch":"agent/28-restart-safe-cleanup","merge_mode":"regular","reason":"cleanup-complete"}
+```
+
+| `status` | exit | meaning |
+| --- | --- | --- |
+| `cleaned` | 0 | this run performed at least one cleanup step |
+| `already-clean` | 0 | nothing was pending; this run mutated nothing |
+| `waiting` | 10 | a normal precondition has not happened yet (PR still open) — no alert |
+| `blocked` | 20 | dirty, diverged, ambiguous, or unprovable state needing a human |
+| `retry` | 30 | authentication, GitHub, fetch, or another operational failure that may recover |
+
+`merge_mode` is `regular`, `squash`, or `null` when not yet proven; `reason` is a stable token (e.g. `pr-open`, `merge-unprovable`, `worktree-dirty`), never prose. Read the stderr diagnostic for the details behind a `blocked` or `retry`.
+
+Never use forced worktree removal, reset, clean, or a force-push of content. The only permitted force flag is `--force-with-lease=refs/heads/<branch>:<proven-sha>` on the remote branch deletion, where it constrains the delete to the proven tip instead of loosening it — never a bare `--force`, never `--force-with-lease` without an expected SHA, never on anything but that deletion. `git branch -D` only via the proven-squash path in `cleanup-merged.sh` (PR `MERGED` + `agent/*` + merge commit in `origin/main` + patch-id equivalence + clean worktree); never by hand. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
 
 ---
 
 ## Red Flags — STOP
 
 - **Branching from local `main` or a feature branch.** Always branch from freshly-fetched `origin/main`; if local `main` diverged or the primary worktree is dirty, stop without mutating it.
-- **Running `git stash -f`, `git reset --hard`, or `git clean -f` on primary `main` to force past a tripped dirty-tree guard.** Run `scripts/diagnose-dirty-main.sh`, report the breakdown, and ask — pre-existing main state isn't the current issue's job to resolve.
-- **Writing or committing issue artifacts in the primary worktree.** After isolation, every write and commit happens in `<worktree-path>` — never on primary `main`.
+- **`git stash -f`, `git reset --hard`, or `git clean -f` on primary `main` to force past the dirty-tree guard.** Run `scripts/diagnose-dirty-main.sh`, report the breakdown, and ask — pre-existing main state isn't this issue's job to resolve.
+- **Writing or committing issue artifacts in the primary worktree.** After isolation, every write and commit happens in `<worktree-path>`.
 - **More than one `Closes #<number>` in the PR body.** Exactly one closing reference.
 - **Generic `## Summary`.** Problem must reflect the issue; Approach must reflect the diff.
-- **Leaving the PR in draft past a green Phase 6.** Mark it ready once verification passes on both manual and managed runs — see `scripts/finish-handoff.sh`.
-- **Calling `GH pr ready` directly in Phase 6.** Always go through `scripts/finish-handoff.sh` so the handoff remains one explicit, testable step.
+- **Leaving the PR in draft past a green Phase 6, or calling `GH pr ready` directly.** Always hand off through `scripts/finish-handoff.sh`, so the handoff stays one explicit, testable step.
 - **Treating a merely closed PR as merged.** Only `MERGED` triggers Phase 7 cleanup.
-- **Silently accepting or suppressing a baseline failure.** In an unattended run a pre-existing baseline failure may be passed only when `scripts/baseline-triage.sh` returns `CONTINUE`, it is documented in the PR, and it is re-verified in Phase 5 — never ignored, excluded, weakened, converted to a pass, or marked ready on a regression.
+- **Silently accepting or suppressing a baseline failure.** Unattended, one may be passed only when `scripts/baseline-triage.sh` returns `CONTINUE`, it is documented in the PR, and it is re-verified in Phase 5 — never ignored, excluded, weakened, converted to a pass, or marked ready on a regression.
