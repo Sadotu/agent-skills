@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
 # Phase 7 ("Post-Merge Cleanup") for skills/github-issue/SKILL.md.
 #
-# Only ever cleans up once the PR is MERGED, its branch is under agent/*,
-# that branch has actually landed in origin/main (as a true merge commit,
-# or proven via patch-id equivalence for a squash merge -- see MERGE_MODE
-# below; rebase merges are a documented dead end that stops and asks a
-# human), and its worktree is clean. Never uses forced worktree removal,
-# reset, clean, or a force-push of content. Uses `git branch -D` only via
-# the proven-squash path; never on unproven state. The one permitted force
+# Cleans up a terminal agent/* PR, in one of two dispositions the PR's
+# GitHub state selects. An OPEN PR is never terminal and any other state is
+# never guessed at.
+#
+#   MERGED  -> PR_DISPOSITION=merged. The branch must be proven to have
+#              landed in origin/main (a true merge commit, or patch-id
+#              equivalence for a squash merge -- see MERGE_MODE below;
+#              rebase merges are a documented dead end that stops and asks
+#              a human). Local main is fast-forwarded and the linked issue
+#              closed if GitHub did not close it.
+#   CLOSED  -> PR_DISPOSITION=closed-unmerged. No merge proof is required
+#              or possible: the change is being discarded on purpose. Only
+#              state this workflow owns is removed -- local main is never
+#              moved and the linked issue is read but never closed.
+#
+# Both dispositions run the same cleanliness, ownership, protected-branch,
+# leased-remote and restart-safety guards, and a clean worktree is required
+# either way. Never uses forced worktree removal, reset, clean, or a
+# force-push of content. Uses `git branch -D` only on the two gated paths
+# below (a proven squash, or a closed-unmerged branch git will not delete
+# with -d by definition); never on unproven state. The one permitted force
 # flag is `--force-with-lease=refs/heads/<branch>:<proven-sha>` on the
 # remote deletion, where it constrains the delete to the proven tip rather
 # than loosening it.
@@ -23,6 +37,9 @@
 #   {"status":"cleaned","pr":"40","issue":"28","branch":"agent/28-x",
 #    "merge_mode":"regular","reason":"cleanup-complete"}
 #
+#   {"status":"cleaned","pr":"40","issue":"28","branch":"agent/28-x",
+#    "merge_mode":null,"reason":"closed-unmerged-cleanup-complete"}
+#
 #   status         exit  meaning
 #   cleaned          0   this run performed at least one cleanup step
 #   already-clean    0   nothing was pending; this run mutated nothing
@@ -37,6 +54,7 @@ pr_number=""
 issue_number=""
 BRANCH=""
 MERGE_MODE=""
+PR_DISPOSITION=""
 RECORD_EMITTED=0
 ERR_LINE=""
 
@@ -123,10 +141,14 @@ BRANCH="$(printf '%s' "$PR_JSON" | jq -r '.headRefName // empty')"
 PR_STATE="$(printf '%s' "$PR_JSON" | jq -r '.state // empty')"
 merge_sha="$(printf '%s' "$PR_JSON" | jq -r '.mergeCommit.oid // empty')"
 
+# The PR's terminal state selects the disposition; everything downstream
+# branches on PR_DISPOSITION rather than re-reading PR_STATE.
 case "$PR_STATE" in
-  MERGED) ;;
+  MERGED) PR_DISPOSITION=merged ;;
+  CLOSED) PR_DISPOSITION=closed-unmerged ;;
   OPEN) finish waiting pr-open "PR #$pr_number is still open; nothing to clean up yet" ;;
-  *) finish blocked pr-closed-unmerged "PR #$pr_number is $PR_STATE without being merged" ;;
+  *) finish blocked pr-state-unknown \
+    "PR #$pr_number reports an unrecognized state: ${PR_STATE:-<empty>}" ;;
 esac
 
 case "$BRANCH" in
@@ -195,6 +217,9 @@ if [ -f "$journal_file" ]; then
   journal_issue=""
   journal_branch=""
   journal_merge_mode=""
+  # A journal written before closed-unmerged cleanup existed carries no
+  # disposition key, and could only ever have described a merged cleanup.
+  journal_disposition=merged
   while IFS= read -r line || [ -n "$line" ]; do
     if [ -z "$line" ]; then continue; fi
     key="${line%%=*}"
@@ -204,6 +229,7 @@ if [ -f "$journal_file" ]; then
       issue) journal_issue="$value" ;;
       branch) journal_branch="$value" ;;
       merge_mode) journal_merge_mode="$value" ;;
+      disposition) journal_disposition="$value" ;;
       head_sha) journal_head_sha="$value" ;;
       merge_sha) : ;;
       worktree) journal_worktree="$value" ;;
@@ -222,13 +248,19 @@ if [ -f "$journal_file" ]; then
   done < "$journal_file"
 
   if [ "$journal_pr" != "$pr_number" ] || [ "$journal_issue" != "$issue_number" ] \
-    || [ "$journal_branch" != "$BRANCH" ]; then
+    || [ "$journal_branch" != "$BRANCH" ] || [ "$journal_disposition" != "$PR_DISPOSITION" ]; then
     finish blocked journal-mismatch \
-      "Cleanup journal describes a different run (pr=$journal_pr issue=$journal_issue branch=$journal_branch)"
+      "Cleanup journal describes a different run (pr=$journal_pr issue=$journal_issue branch=$journal_branch disposition=$journal_disposition)"
   fi
-  case "$journal_merge_mode" in
-    regular | squash) MERGE_MODE="$journal_merge_mode" ;;
-    *) finish blocked journal-invalid "Cleanup journal records no proven merge mode" ;;
+  # The disposition decides whether local main may move, so the evidence it
+  # implies has to match: a merged cleanup carries a proven merge mode, a
+  # closed-unmerged cleanup must carry none.
+  case "$PR_DISPOSITION:$journal_merge_mode" in
+    merged:regular | merged:squash) MERGE_MODE="$journal_merge_mode" ;;
+    closed-unmerged:) ;;
+    merged:*) finish blocked journal-invalid "Cleanup journal records no proven merge mode" ;;
+    *) finish blocked journal-invalid \
+      "Cleanup journal records a merge mode for a closed, unmerged PR: $journal_merge_mode" ;;
   esac
   case "$journal_status" in
     in-progress | cleaned) ;;
@@ -248,13 +280,17 @@ if git -C "$WORKSPACE" show-ref --verify --quiet "refs/heads/$BRANCH"; then
   head_sha="$(git -C "$WORKSPACE" rev-parse "refs/heads/$BRANCH")"
 fi
 
-# --- Guard: branch's work actually landed in origin/main. Invariant:
-#     MERGE_MODE=regular iff the branch tip is an ancestor of origin/main;
-#     MERGE_MODE=squash iff not, but the branch diff and mergeCommit diff
-#     are proven patch-id equivalent; anything else refuses and asks a
-#     human. Known limitation: patch-id hashes diff context lines, so
-#     unrelated commits shifting that context can produce a false
-#     negative even for a clean squash -- fails safe, left as-is.
+# --- Guard: a merged branch's work actually landed in origin/main.
+#     Invariant: MERGE_MODE=regular iff the branch tip is an ancestor of
+#     origin/main; MERGE_MODE=squash iff not, but the branch diff and
+#     mergeCommit diff are proven patch-id equivalent; anything else
+#     refuses and asks a human. Known limitation: patch-id hashes diff
+#     context lines, so unrelated commits shifting that context can produce
+#     a false negative even for a clean squash -- fails safe, left as-is.
+#     A closed, unmerged PR has no merge to prove and asserts none: its
+#     work is being discarded deliberately, so MERGE_MODE stays empty.
+#     Either way, a local branch that is already gone without a journal to
+#     account for it is unowned state this run must not assume it created.
 #     Once a journal exists the proof is already recorded: after the
 #     branch refs are gone there is nothing left to re-derive it from. ---
 if [ "$journal_present" -eq 0 ]; then
@@ -263,23 +299,25 @@ if [ "$journal_present" -eq 0 ]; then
       "Local branch $BRANCH is absent and no cleanup journal proves a prior cleanup"
   fi
 
-  if git -C "$WORKSPACE" merge-base --is-ancestor "$BRANCH" origin/main; then
-    MERGE_MODE=regular
-  else
-    if [ -n "$merge_sha" ] \
-      && git -C "$WORKSPACE" merge-base --is-ancestor "$merge_sha" origin/main; then
-      MERGE_PARENT="$(git -C "$WORKSPACE" rev-parse "$merge_sha^")"
-      FEATURE_BASE="$(git -C "$WORKSPACE" merge-base "$head_sha" "$MERGE_PARENT")"
-      FEATURE_PATCH_ID="$(git -C "$WORKSPACE" diff "$FEATURE_BASE" "$head_sha" | git patch-id --verbatim | awk '{print $1}')"
-      SQUASH_PATCH_ID="$(git -C "$WORKSPACE" diff "$MERGE_PARENT" "$merge_sha" | git patch-id --verbatim | awk '{print $1}')"
-      if [ -n "$FEATURE_PATCH_ID" ] && [ "$FEATURE_PATCH_ID" = "$SQUASH_PATCH_ID" ]; then
-        MERGE_MODE=squash
+  if [ "$PR_DISPOSITION" = merged ]; then
+    if git -C "$WORKSPACE" merge-base --is-ancestor "$BRANCH" origin/main; then
+      MERGE_MODE=regular
+    else
+      if [ -n "$merge_sha" ] \
+        && git -C "$WORKSPACE" merge-base --is-ancestor "$merge_sha" origin/main; then
+        MERGE_PARENT="$(git -C "$WORKSPACE" rev-parse "$merge_sha^")"
+        FEATURE_BASE="$(git -C "$WORKSPACE" merge-base "$head_sha" "$MERGE_PARENT")"
+        FEATURE_PATCH_ID="$(git -C "$WORKSPACE" diff "$FEATURE_BASE" "$head_sha" | git patch-id --verbatim | awk '{print $1}')"
+        SQUASH_PATCH_ID="$(git -C "$WORKSPACE" diff "$MERGE_PARENT" "$merge_sha" | git patch-id --verbatim | awk '{print $1}')"
+        if [ -n "$FEATURE_PATCH_ID" ] && [ "$FEATURE_PATCH_ID" = "$SQUASH_PATCH_ID" ]; then
+          MERGE_MODE=squash
+        fi
       fi
-    fi
 
-    if [ -z "$MERGE_MODE" ]; then
-      finish blocked merge-unprovable \
-        "Cannot prove $BRANCH landed in origin/main (not an ancestor, not a provable squash). Refusing automatic cleanup -- verify manually."
+      if [ -z "$MERGE_MODE" ]; then
+        finish blocked merge-unprovable \
+          "Cannot prove $BRANCH landed in origin/main (not an ancestor, not a provable squash). Refusing automatic cleanup -- verify manually."
+      fi
     fi
   fi
 fi
@@ -456,7 +494,9 @@ if ! step_done remote-branch; then
   fi
 fi
 
-if ! step_done main; then
+# A closed, unmerged PR resolved nothing, so the trunk has no business
+# moving for it: the fast-forward is skipped outright rather than guarded.
+if [ "$PR_DISPOSITION" = merged ] && ! step_done main; then
   main_sha="$(git -C "$WORKSPACE" rev-parse --verify --quiet refs/heads/main)" \
     || finish blocked main-missing "No local main branch to fast-forward"
   origin_main_sha="$(git -C "$WORKSPACE" rev-parse --verify --quiet refs/remotes/origin/main)" \
@@ -477,9 +517,13 @@ if ! step_done main; then
 fi
 
 if ! step_done issue; then
+  # Read on both dispositions to verify the linked issue is real and
+  # reachable before anything is deleted. Only a merged PR resolves it; a
+  # closed, unmerged one leaves the work still to do, so the issue stays
+  # open and nothing is written back.
   issue_state="$(GH issue view "$issue_number" --json state -q .state)" \
     || finish retry issue-view-failed "unable to read issue #$issue_number from GitHub"
-  if [ "$issue_state" != CLOSED ]; then pending_issue=1; fi
+  if [ "$PR_DISPOSITION" = merged ] && [ "$issue_state" != CLOSED ]; then pending_issue=1; fi
 fi
 
 if [ -f "$artifact_manifest" ]; then pending_manifest=1; fi
@@ -494,6 +538,7 @@ journal_write() {
     printf 'pr=%s\n' "$pr_number"
     printf 'issue=%s\n' "$issue_number"
     printf 'branch=%s\n' "$BRANCH"
+    printf 'disposition=%s\n' "$PR_DISPOSITION"
     printf 'merge_mode=%s\n' "$MERGE_MODE"
     printf 'head_sha=%s\n' "$head_sha"
     printf 'merge_sha=%s\n' "$merge_sha"
@@ -563,14 +608,18 @@ fi
 
 if [ "$pending_local_branch" -eq 1 ]; then
   mark_attempted local-branch
-  if [ "$MERGE_MODE" = regular ]; then
+  if [ "$PR_DISPOSITION" = merged ] && [ "$MERGE_MODE" = regular ]; then
     git branch -d "$BRANCH" >&2
   else
-    # MERGE_MODE=squash only: reachable exclusively via the guard stack
-    # above (PR MERGED + agent/* + clean worktree + proven patch-id
-    # equivalence). `branch -d` would refuse here since the tip genuinely
-    # isn't an ancestor by git's own definition; `-D` bypasses that check.
-    # Never use -D on any other path; never loosen this gate.
+    # Exactly two paths reach here, each already fully gated above, and in
+    # both `branch -d` would refuse because the tip genuinely isn't an
+    # ancestor of main by git's own definition; `-D` bypasses that check.
+    #   merged + MERGE_MODE=squash: PR MERGED + agent/* + clean worktree +
+    #     proven patch-id equivalence -- the work provably landed already.
+    #   closed-unmerged: PR CLOSED + agent/* + clean worktree + a remote
+    #     tip still equal to the proven local tip -- the work is being
+    #     discarded on purpose, which is the whole point of that path.
+    # Never use -D on any other path; never loosen either gate.
     git branch -D "$BRANCH" >&2
   fi
 fi
@@ -640,6 +689,9 @@ if [ "$performed" -eq 1 ] || [ "$journal_present" -eq 1 ]; then
 fi
 
 if [ "$performed" -eq 1 ]; then
-  finish cleaned cleanup-complete
+  if [ "$PR_DISPOSITION" = merged ]; then
+    finish cleaned cleanup-complete
+  fi
+  finish cleaned closed-unmerged-cleanup-complete
 fi
 finish already-clean nothing-to-clean

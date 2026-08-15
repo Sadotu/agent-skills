@@ -335,6 +335,21 @@ land_branch_on_origin_only() {
   git -C "$WT" push -q origin "$BRANCH:main"
 }
 
+# advance_origin_main_only pushes an unrelated commit onto the fake origin's
+# main from a throwaway clone, without touching CLONE or $BRANCH. It leaves
+# the primary worktree behind origin/main, so a run that fast-forwards main
+# is distinguishable from one that leaves it alone.
+advance_origin_main_only() {
+  local dir="$BASE/advance-main"
+  git clone -q "$ORIGIN" "$dir"
+  git -C "$dir" config user.email test@example.com
+  git -C "$dir" config user.name "Test User"
+  git -C "$dir" config core.hooksPath "$BASE/no-hooks"
+  git -C "$dir" commit -q --allow-empty -m "unrelated commit on main"
+  git -C "$dir" push -q origin main
+  rm -rf "$dir"
+}
+
 manifest_path() {
   # manifest_path <pr-number> — Phase 3's recorded artifact manifest.
   local pr="$1" manifest
@@ -389,6 +404,28 @@ assert_fully_cleaned() {
     grep -qx 'status=cleaned' "$(journal_path "$n")"
 }
 
+# assert_fully_cleaned_closed <description-prefix> <number> <main-sha-before>
+# Every step a closed, unmerged PR owns has landed, and the two things that
+# cleanup must never touch on that path — local main and the linked issue —
+# are provably untouched.
+assert_fully_cleaned_closed() {
+  local p="$1" n="$2" main_before="$3"
+  assert_true "$p: worktree removed" [ ! -e "$WT" ]
+  assert_false "$p: local branch deleted" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_false "$p: remote branch deleted" \
+    bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_eq "$p: local main left byte-for-byte where it was" "$main_before" \
+    "$(git -C "$CLONE" rev-parse main)"
+  assert_false "$p: linked issue left open" \
+    bash -c "grep -q 'issue close $n' '$GH_LOG'"
+  assert_true "$p: manifest removed" [ ! -e "$(manifest_path "$n")" ]
+  assert_true "$p: journal records completion" \
+    grep -qx 'status=cleaned' "$(journal_path "$n")"
+  assert_true "$p: journal records the closed-unmerged disposition" \
+    grep -qx 'disposition=closed-unmerged' "$(journal_path "$n")"
+}
+
 # restart_boundary_case <number> <slug> <git-fail-match> <gh-fail-match> <expected-done-step>
 # Crashes a real run at one mutation boundary, then reruns it clean and
 # asserts the second run converges instead of tripping over the state the
@@ -417,6 +454,39 @@ restart_boundary_case() {
   assert_eq "$slug: restart converges" 0 "$rc"
   assert_record "$slug: restart status" status cleaned
   assert_fully_cleaned "$slug" "$n"
+  assert_no_forbidden_git "$slug: no forbidden git command issued"
+}
+
+# restart_boundary_case_closed <number> <slug> <git-fail-match> <expected-done-step>
+# The closed-unmerged twin of restart_boundary_case: crash a real run at one
+# mutation boundary, rerun it clean, and assert it converges without ever
+# moving local main or closing the linked issue.
+restart_boundary_case_closed() {
+  local n="$1" slug="$2" gitfail="$3" expect_done="$4" rc main_before
+  setup_artifact_fixture "$n" "$slug"
+  advance_origin_main_only
+  main_before="$(git -C "$CLONE" rev-parse main)"
+
+  GIT_FAIL_MATCH="$gitfail" \
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" "$n" "$n" >"$BASE/out.log" 2>&1
+  rc=$?
+  unset GIT_FAIL_MATCH STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "$slug: interrupted run reports a retryable failure" 30 "$rc"
+  assert_record "$slug: interrupted run status" status retry
+  assert_true "$slug: journal records the steps that completed" \
+    grep -qx "done=$expect_done" "$(journal_path "$n")"
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" "$n" "$n" >"$BASE/out.log" 2>&1
+  rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "$slug: restart converges" 0 "$rc"
+  assert_record "$slug: restart status" status cleaned
+  assert_record "$slug: restart reports no merge mode" merge_mode null
+  assert_fully_cleaned_closed "$slug" "$n" "$main_before"
   assert_no_forbidden_git "$slug: no forbidden git command issued"
 }
 
@@ -724,20 +794,272 @@ test_case12_preserves_unrecorded_candidate() {
     bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
 }
 
-# --- Case 13: PR closed without merging -> blocked, never waiting ---
-test_case13_closed_unmerged() {
-  new_fixture 23 closed-unmerged
-  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" \
+# --- Case 13: PR closed without merging -> the branch's own state is
+# cleaned up, while local main and the linked issue are left alone. The
+# branch never landed anywhere, so no merge proof is required or possible. ---
+test_case13_closed_unmerged_cleanup() {
+  setup_artifact_fixture 23 closed-unmerged
+  # origin/main moves on without this branch: a merged-path run would
+  # fast-forward local main here, and this one must not.
+  advance_origin_main_only
+  local main_before proven_sha
+  main_before="$(git -C "$CLONE" rev-parse main)"
+  proven_sha="$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
     run_cleanup "$CLONE" 23 23 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case13: exits zero on a clean closed, unmerged PR" 0 "$rc"
+  assert_single_record "case13: exactly one record on stdout"
+  assert_record "case13: status is cleaned" status cleaned
+  assert_record "case13: reason identifies the closed-unmerged cleanup" \
+    reason closed-unmerged-cleanup-complete
+  assert_record "case13: record carries the branch" branch "$BRANCH"
+  assert_record "case13: no merge mode is claimed" merge_mode null
+  assert_fully_cleaned_closed "case13" 23 "$main_before"
+  assert_no_forbidden_git "case13: no forbidden git command issued"
+  assert_true "case13: the remote delete is leased to the recorded tip" \
+    grep -Fq -- "--force-with-lease=refs/heads/$BRANCH:$proven_sha" "$GIT_CMD_LOG"
+  assert_true "case13: local main is still behind origin/main" \
+    bash -c "[ \"\$(git -C '$CLONE' rev-parse main)\" != \"\$(git -C '$CLONE' rev-parse origin/main)\" ]"
+}
+
+# --- Case 33: an immediate rerun of a closed-unmerged cleanup is a no-op ---
+test_case33_closed_unmerged_rerun() {
+  setup_artifact_fixture 44 closed-rerun
+  advance_origin_main_only
+  local main_before
+  main_before="$(git -C "$CLONE" rev-parse main)"
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 44 44 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+  assert_eq "case33: first run exits zero" 0 "$rc"
+  assert_record "case33: first run reports cleaned" status cleaned
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 44 44 >"$BASE/out.log" 2>&1
+  rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case33: rerun exits zero" 0 "$rc"
+  assert_record "case33: rerun reports already-clean" status already-clean
+  assert_record "case33: rerun reason names the converged state" reason nothing-to-clean
+  assert_record "case33: rerun still reports no merge mode" merge_mode null
+  assert_eq "case33: rerun leaves main untouched" "$main_before" \
+    "$(git -C "$CLONE" rev-parse main)"
+  assert_false "case33: rerun never closes the linked issue" \
+    bash -c "grep -q 'issue close 44' '$GH_LOG'"
+  assert_no_forbidden_git "case33: no forbidden git command issued"
+}
+
+# --- Case 34: a dirty worktree is preserved on the closed path too ---
+test_case34_closed_dirty_worktree() {
+  new_fixture 45 closed-dirty
+  echo "uncommitted" > "$WT/dirty.txt"
+  local main_before
+  main_before="$(git -C "$CLONE" rev-parse main)"
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" \
+    run_cleanup "$CLONE" 45 45 >"$BASE/out.log" 2>&1
   local rc=$?
   unset STUB_PR_STATE STUB_PR_HEAD_REF
 
-  assert_eq "case13: blocked exit code on a CLOSED unmerged PR" 20 "$rc"
-  assert_record "case13: status is blocked" status blocked
-  assert_record "case13: reason names the closed unmerged PR" reason pr-closed-unmerged
-  assert_true "case13: worktree left in place" [ -d "$WT" ]
-  assert_true "case13: local branch still present" \
+  assert_eq "case34: blocked exit code when a closed PR's worktree is dirty" 20 "$rc"
+  assert_record "case34: status is blocked" status blocked
+  assert_record "case34: reason names the dirty worktree" reason worktree-dirty
+  assert_true "case34: worktree left in place" [ -d "$WT" ]
+  assert_true "case34: uncommitted work untouched" [ -f "$WT/dirty.txt" ]
+  assert_true "case34: local branch preserved" \
     bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_true "case34: remote branch preserved" \
+    bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_eq "case34: main untouched" "$main_before" "$(git -C "$CLONE" rev-parse main)"
+}
+
+# --- Case 35: a closed PR on a non-agent head is still refused ---
+test_case35_closed_non_agent_branch() {
+  new_fixture 46 closed-non-agent
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="feature/not-agent" \
+    run_cleanup "$CLONE" 46 46 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF
+
+  assert_eq "case35: blocked exit code when a closed PR's head isn't agent/*" 20 "$rc"
+  assert_record "case35: status is blocked" status blocked
+  assert_record "case35: reason names the branch prefix" reason branch-not-agent
+  assert_true "case35: unrelated worktree left in place" [ -d "$WT" ]
+  assert_true "case35: unrelated local branch preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
+# --- Case 36: a closed PR whose worktree vanished unprovably is refused ---
+test_case36_closed_worktree_missing_without_evidence() {
+  new_fixture 47 closed-worktree-missing
+  git -C "$CLONE" worktree remove "$WT"
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" \
+    run_cleanup "$CLONE" 47 47 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF
+
+  assert_eq "case36: blocked exit code on ambiguous ownership" 20 "$rc"
+  assert_record "case36: status is blocked" status blocked
+  assert_record "case36: reason names the missing worktree" reason worktree-missing
+  assert_true "case36: local branch preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_true "case36: remote branch preserved" \
+    bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
+# --- Case 37: a closed PR's remote branch that advanced past the local tip
+# carries work this run never accounted for -> preserve it. ---
+test_case37_closed_remote_branch_advanced() {
+  new_fixture 48 closed-remote-advanced
+
+  git clone -q "$ORIGIN" "$BASE/other"
+  git -C "$BASE/other" config user.email test@example.com
+  git -C "$BASE/other" config user.name "Test User"
+  git -C "$BASE/other" config core.hooksPath "$BASE/no-hooks"
+  git -C "$BASE/other" checkout -q -b "$BRANCH" "origin/$BRANCH"
+  git -C "$BASE/other" commit -q --allow-empty -m "remote-only work"
+  git -C "$BASE/other" push -q origin "$BRANCH"
+  local remote_sha
+  remote_sha="$(git -C "$ORIGIN" rev-parse "refs/heads/$BRANCH")"
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" \
+    run_cleanup "$CLONE" 48 48 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF
+
+  assert_eq "case37: blocked when a closed PR's remote branch advanced" 20 "$rc"
+  assert_record "case37: status is blocked" status blocked
+  assert_record "case37: reason names the advanced remote branch" reason remote-branch-advanced
+  assert_eq "case37: remote branch preserved at its new tip" "$remote_sha" \
+    "$(git -C "$ORIGIN" rev-parse "refs/heads/$BRANCH")"
+  assert_true "case37: local branch preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_true "case37: worktree preserved" [ -d "$WT" ]
+}
+
+# --- Case 38: an unrecognized PR state is never guessed at ---
+test_case38_unknown_pr_state() {
+  new_fixture 49 unknown-state
+
+  STUB_PR_STATE="LOCKED" STUB_PR_HEAD_REF="$BRANCH" \
+    run_cleanup "$CLONE" 49 49 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF
+
+  assert_eq "case38: blocked exit code on an unrecognized PR state" 20 "$rc"
+  assert_record "case38: status is blocked" status blocked
+  assert_record "case38: reason names the unknown state" reason pr-state-unknown
+  assert_true "case38: worktree left in place" [ -d "$WT" ]
+  assert_true "case38: local branch preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
+# --- Cases 39-41: crash at each closed-path mutation boundary, then converge ---
+test_case39_closed_restart_after_artifacts() {
+  restart_boundary_case_closed 50 closed-restart-artifacts "worktree remove" artifacts
+}
+
+test_case40_closed_restart_after_worktree() {
+  restart_boundary_case_closed 51 closed-restart-worktree "branch -D" worktree
+}
+
+test_case41_closed_restart_after_local_branch() {
+  restart_boundary_case_closed 52 closed-restart-local-branch "--delete" local-branch
+}
+
+# --- Case 42: the closed path's last window — the remote branch is gone but
+# the manifest removal and journal finalize never happened. ---
+test_case42_closed_restart_before_manifest_removal() {
+  setup_artifact_fixture 53 closed-restart-manifest
+  advance_origin_main_only
+  local main_before
+  main_before="$(git -C "$CLONE" rev-parse main)"
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 53 53 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+  assert_eq "case42: first run exits zero" 0 "$rc"
+
+  local journal manifest
+  journal="$(journal_path 53)"
+  manifest="$(manifest_path 53)"
+  mkdir -p "$(dirname "$manifest")"
+  printf '%s\n' \
+    docs/superpowers/specs/2026-08-15-closed-restart-manifest-design.md \
+    docs/superpowers/plans/2026-08-15-closed-restart-manifest.md > "$manifest"
+  sed -i -e '/^done=manifest$/d' -e '/^done=remote-branch$/d' \
+    -e 's/^status=cleaned$/status=in-progress/' "$journal"
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 53 53 >"$BASE/out.log" 2>&1
+  rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case42: restart exits zero" 0 "$rc"
+  assert_record "case42: restart reports cleaned" status cleaned
+  assert_true "case42: manifest removed" [ ! -e "$manifest" ]
+  assert_true "case42: journal records completion" grep -qx 'status=cleaned' "$journal"
+  assert_eq "case42: restart leaves main untouched" "$main_before" \
+    "$(git -C "$CLONE" rev-parse main)"
+  assert_false "case42: restart never closes the linked issue" \
+    bash -c "grep -q 'issue close 53' '$GH_LOG'"
+  assert_no_forbidden_git "case42: no forbidden git command issued"
+}
+
+# --- Case 43: a journal proving a merged cleanup must never be resumed
+# against a PR GitHub now reports as closed and unmerged. ---
+test_case43_journal_disposition_mismatch() {
+  new_fixture 54 disposition-mismatch
+  land_branch_on_origin_only
+  local head main_before
+  head="$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
+  main_before="$(git -C "$CLONE" rev-parse main)"
+  write_journal 54 regular "$head" in-progress attempted:artifacts done:artifacts
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" \
+    run_cleanup "$CLONE" 54 54 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF
+
+  assert_eq "case43: blocked when the journal's disposition disagrees" 20 "$rc"
+  assert_record "case43: status is blocked" status blocked
+  assert_record "case43: reason names the journal mismatch" reason journal-mismatch
+  assert_true "case43: worktree preserved" [ -d "$WT" ]
+  assert_true "case43: local branch preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_eq "case43: main untouched" "$main_before" "$(git -C "$CLONE" rev-parse main)"
+}
+
+# --- Case 44: a closed-unmerged journal claiming a proven merge mode is
+# corrupt evidence — accepting it would re-enable the main fast-forward. ---
+test_case44_closed_journal_with_merge_mode() {
+  new_fixture 55 closed-journal-mode
+  land_branch_on_origin_only
+  local head main_before
+  head="$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
+  main_before="$(git -C "$CLONE" rev-parse main)"
+  write_journal 55 regular "$head" in-progress disposition:closed-unmerged
+
+  STUB_PR_STATE="CLOSED" STUB_PR_HEAD_REF="$BRANCH" \
+    run_cleanup "$CLONE" 55 55 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF
+
+  assert_eq "case44: blocked on a closed journal claiming a merge mode" 20 "$rc"
+  assert_record "case44: status is blocked" status blocked
+  assert_record "case44: reason names the invalid journal" reason journal-invalid
+  assert_true "case44: worktree preserved" [ -d "$WT" ]
+  assert_eq "case44: main untouched" "$main_before" "$(git -C "$CLONE" rev-parse main)"
 }
 
 # --- Case 14: an immediate rerun is a provable no-op ---
@@ -1237,7 +1559,7 @@ test_case9_rebase_merge
 test_case10_whitespace_only_squash_diff
 test_case11_preserves_tracked_documents
 test_case12_preserves_unrecorded_candidate
-test_case13_closed_unmerged
+test_case13_closed_unmerged_cleanup
 test_case14_rerun_already_clean
 test_case15_restart_after_artifacts
 test_case16_restart_after_worktree
@@ -1257,6 +1579,18 @@ test_case29_crash_after_local_branch_deletion
 test_case30_branch_advanced_after_proof
 test_case31_remote_branch_advanced
 test_case32_remote_advances_during_the_run
+test_case33_closed_unmerged_rerun
+test_case34_closed_dirty_worktree
+test_case35_closed_non_agent_branch
+test_case36_closed_worktree_missing_without_evidence
+test_case37_closed_remote_branch_advanced
+test_case38_unknown_pr_state
+test_case39_closed_restart_after_artifacts
+test_case40_closed_restart_after_worktree
+test_case41_closed_restart_after_local_branch
+test_case42_closed_restart_before_manifest_removal
+test_case43_journal_disposition_mismatch
+test_case44_closed_journal_with_merge_mode
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
