@@ -226,9 +226,29 @@ Run this phase when the user reports the PR merged or authenticated GitHub state
 
 `scripts/cleanup-merged.sh` only ever cleans up once the PR is `MERGED`, its branch is under `agent/*`, that branch has actually landed in `origin/main` — as a true merge commit, or proven via `git patch-id` equivalence for a squash merge; rebase merges stop and ask, since the PR's merge commit is only the last replayed commit and can never patch-match the whole feature — and its worktree is clean. It deletes only the two manifest-recorded session artifacts after confirming they are ignored and untracked. Matching tracked documents are preserved; an unrecorded matching file stops cleanup with an actionable report.
 
+Run it directly — this is the canonical Phase 7 cleanup for a manual run and for any unattended caller:
+
 ```bash
 scripts/cleanup-merged.sh <pr-number> <issue-number>
 ```
+
+It evaluates every knowable guard before the first mutation, then records each completed step in a durable journal at `$(git rev-parse --git-common-dir)/github-issue/cleanup/pr-<pr-number>.state`. An interrupted run therefore converges when rerun instead of failing on the state it already changed. A missing worktree, local branch, or recorded artifact is accepted **only** when that journal proves a prior run removed it; otherwise cleanup stops and asks.
+
+Every run writes exactly one JSON record to stdout and keeps human diagnostics on stderr, so an unattended caller never parses free-form text:
+
+```json
+{"status":"cleaned","pr":"40","issue":"28","branch":"agent/28-restart-safe-cleanup","merge_mode":"regular","reason":"cleanup-complete"}
+```
+
+| `status` | exit | meaning |
+| --- | --- | --- |
+| `cleaned` | 0 | this run performed at least one cleanup step |
+| `already-clean` | 0 | nothing was pending; this run mutated nothing |
+| `waiting` | 10 | a normal precondition has not happened yet (PR still open) — no alert |
+| `blocked` | 20 | dirty, diverged, ambiguous, or unprovable state needing a human |
+| `retry` | 30 | authentication, GitHub, fetch, or another operational failure that may recover |
+
+`merge_mode` is `regular`, `squash`, or `null` when not yet proven; `reason` is a stable token (e.g. `pr-open`, `merge-unprovable`, `worktree-dirty`), never prose. Read the stderr diagnostic for the details behind a `blocked` or `retry`.
 
 Never use forced worktree removal, reset, clean, or force-push during post-merge cleanup. `git branch -D` only via the proven-squash path in `cleanup-merged.sh` (PR `MERGED` + `agent/*` + merge commit in `origin/main` + patch-id equivalence + clean worktree); never by hand. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
 
