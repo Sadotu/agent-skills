@@ -85,7 +85,6 @@ FORBIDDEN_GIT_PATTERNS=(
   'worktree remove .*(--force|-f)( |$)'
   '(^| )reset( |$)'
   '(^| )clean( |$)'
-  'push .*(--force|--force-with-lease)( |$)'
   'push .* -f( |$)'
   'push .*\+refs'
   'branch .*-[dD] (main|master|develop|release/|hotfix/)'
@@ -94,16 +93,30 @@ FORBIDDEN_GIT_PATTERNS=(
   'push .*--delete [^ ]*\*'
 )
 
+# The only force flag this workflow may ever issue: a deletion leased to
+# an explicit 40-hex expected tip, which constrains the delete instead of
+# loosening it.
+ALLOWED_FORCE_RE='push .*--force-with-lease=refs/heads/[^ :]+:[0-9a-f]{40} .*--delete [^ ]+$'
+
 assert_no_forbidden_git() {
   # assert_no_forbidden_git <description> — scans every git invocation the
   # script made in this fixture.
-  local desc="$1" pattern hit=""
+  local desc="$1" pattern hit="" line
   for pattern in "${FORBIDDEN_GIT_PATTERNS[@]}"; do
     if grep -Eq -- "$pattern" "$GIT_CMD_LOG" 2>/dev/null; then
       hit="$pattern"
       break
     fi
   done
+  if [ -z "$hit" ]; then
+    while IFS= read -r line; do
+      case "$line" in *--force*) ;; *) continue ;; esac
+      if ! printf '%s' "$line" | grep -Eq -- "$ALLOWED_FORCE_RE"; then
+        hit="unleashed force flag: $line"
+        break
+      fi
+    done < "$GIT_CMD_LOG"
+  fi
   if [ -z "$hit" ]; then
     ok "$desc"
   else
@@ -228,9 +241,18 @@ if [ "${1:-} ${2:-} ${3:-}" = "remote get-url origin" ]; then
   exit 0
 fi
 echo "$*" >> "$GIT_CMD_LOG"
+# GIT_AUTH pins GIT_ALLOW_PROTOCOL=https; these fixtures speak file://,
+# and an injected race command inherits this environment too.
+unset GIT_ALLOW_PROTOCOL
 if [ -n "${GIT_FAIL_MATCH-}" ] && [[ "$*" == *"$GIT_FAIL_MATCH"* ]]; then
   echo "injected git failure" >&2
   exit 1
+fi
+# Race injection: mutate the fixture once, immediately before the matched
+# command runs, so a check made earlier in the run is already stale.
+if [ -n "${GIT_RACE_MATCH-}" ] && [[ "$*" == *"$GIT_RACE_MATCH"* ]] && [ ! -e "$GIT_RACE_FLAG" ]; then
+  : > "$GIT_RACE_FLAG"
+  bash "$GIT_RACE_SCRIPT"
 fi
 for arg in "$@"; do
   if [ "$arg" = fetch ] || [ "$arg" = push ] || [ "$arg" = ls-remote ]; then
@@ -245,7 +267,6 @@ for arg in "$@"; do
     *) rewritten+=("$arg") ;;
   esac
 done
-unset GIT_ALLOW_PROTOCOL
 exec "$REAL_GIT" "${rewritten[@]}"
 SHIM
   chmod +x "$STUBBIN/git"
@@ -499,6 +520,8 @@ test_case5_cwd_inside_worktree_being_removed() {
 test_case6_happy_path() {
   new_fixture 15 happy
   merge_branch_into_origin_main
+  local proven_sha
+  proven_sha="$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
 
   # 6a: issue not yet closed -> gh issue close is invoked.
   STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
@@ -513,6 +536,8 @@ test_case6_happy_path() {
   assert_record "case6a: record carries the branch" branch "$BRANCH"
   assert_record "case6a: record carries the merge mode" merge_mode regular
   assert_no_forbidden_git "case6a: no forbidden git command issued"
+  assert_true "case6a: the remote delete is leased to the proven tip" \
+    grep -Fq -- "--force-with-lease=refs/heads/$BRANCH:$proven_sha" "$GIT_CMD_LOG"
   assert_true "case6a: initial fetch uses App-scoped Git" \
     bash -c "grep -q '^fetch:$SENTINEL$' '$GIT_NETWORK_LOG'"
   assert_true "case6a: worktree removed" [ ! -e "$WT" ]
@@ -1006,6 +1031,47 @@ test_case31_remote_branch_advanced() {
   assert_true "case31: worktree preserved" [ -d "$WT" ]
 }
 
+# --- Case 32: the remote ref advances between the plan-time check and the
+# delete. The lease must make the push itself reject the stale tip. ---
+test_case32_remote_advances_during_the_run() {
+  new_fixture 43 remote-race
+  merge_branch_into_origin_main
+  local proven_sha
+  proven_sha="$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
+
+  # A second clone with a commit staged but not yet pushed; the injection
+  # pushes it in the window between the plan's ls-remote and the delete.
+  git clone -q "$ORIGIN" "$BASE/other"
+  git -C "$BASE/other" config user.email test@example.com
+  git -C "$BASE/other" config user.name "Test User"
+  git -C "$BASE/other" checkout -q -b "$BRANCH" "origin/$BRANCH"
+  git -C "$BASE/other" commit -q --allow-empty -m "work pushed mid-cleanup"
+  local raced_sha
+  raced_sha="$(git -C "$BASE/other" rev-parse HEAD)"
+  cat > "$BASE/race.sh" <<RACE
+#!/usr/bin/env bash
+"$REAL_GIT" -C "$BASE/other" push -q origin "$BRANCH"
+RACE
+  chmod +x "$BASE/race.sh"
+
+  GIT_RACE_MATCH="--delete" GIT_RACE_SCRIPT="$BASE/race.sh" GIT_RACE_FLAG="$BASE/race.done" \
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 43 43 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset GIT_RACE_MATCH GIT_RACE_SCRIPT GIT_RACE_FLAG
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_true "case32: the race actually fired" [ -e "$BASE/race.done" ]
+  assert_eq "case32: blocked when the remote moved mid-run" 20 "$rc"
+  assert_record "case32: status is blocked" status blocked
+  assert_record "case32: reason names the advanced remote branch" reason remote-branch-advanced
+  assert_eq "case32: remote branch preserved at the raced tip" "$raced_sha" \
+    "$(git -C "$ORIGIN" rev-parse "refs/heads/$BRANCH")"
+  assert_true "case32: the delete was leased to the proven tip" \
+    grep -Fq -- "--force-with-lease=refs/heads/$BRANCH:$proven_sha" "$GIT_CMD_LOG"
+  assert_no_forbidden_git "case32: no forbidden git command issued"
+}
+
 # --- Case 26: crash between closing the issue and removing the manifest ---
 test_case26_restart_before_manifest_removal() {
   setup_artifact_fixture 35 restart-manifest
@@ -1125,12 +1191,10 @@ test_case24_diverged_main() {
 
 # --- Case 25: the script itself never spells a forbidden Git command ---
 test_case25_no_forbidden_git_in_source() {
-  local pattern desc hit=""
+  local pattern hit="" line
   local -a forbidden=(
     'reset[[:space:]]+--hard'
     'git[[:space:]]+clean'
-    'push[[:space:]].*--force'
-    'push[[:space:]].*--force-with-lease'
     'worktree[[:space:]]+remove[[:space:]].*(--force|-f)'
     'branch[[:space:]]+-[dD][[:space:]]+(main|master|develop)'
   )
@@ -1140,6 +1204,20 @@ test_case25_no_forbidden_git_in_source() {
       break
     fi
   done
+  # A force flag may appear only as the leased deletion of the proven tip.
+  if [ -z "$hit" ]; then
+    while IFS= read -r line; do
+      case "$line" in
+        \#*) continue ;;
+        *--force*) ;;
+        *) continue ;;
+      esac
+      if ! printf '%s' "$line" | grep -Fq -- '--force-with-lease="refs/heads/$BRANCH:$head_sha" origin --delete "$BRANCH"'; then
+        hit="unleashed force flag: $line"
+        break
+      fi
+    done < <(sed 's/^[[:space:]]*//' "$CLEANUP")
+  fi
   if [ -z "$hit" ]; then
     ok "case25: cleanup script contains no forbidden Git command"
   else
@@ -1178,6 +1256,7 @@ test_case28_crash_after_artifact_removal
 test_case29_crash_after_local_branch_deletion
 test_case30_branch_advanced_after_proof
 test_case31_remote_branch_advanced
+test_case32_remote_advances_during_the_run
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

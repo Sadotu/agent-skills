@@ -234,7 +234,7 @@ scripts/cleanup-merged.sh <pr-number> <issue-number>
 
 It evaluates every knowable guard before the first mutation, then records each step in a durable journal at `$(git rev-parse --git-common-dir)/github-issue/cleanup/pr-<pr-number>.state` — the intent (`attempted=`) before the mutation and the completion (`done=`) after it, so a crash in between still converges on the next run. A missing worktree, local branch, or recorded artifact is accepted **only** when that journal proves this workflow removed it; otherwise cleanup stops and asks.
 
-The recorded merge proof covers one commit, so cleanup re-verifies before deleting anything: the local branch tip must still equal the proven SHA (`blocked` / `branch-advanced` otherwise) and `ls-remote` must show origin's branch at that same SHA (`blocked` / `remote-branch-advanced` otherwise). Work pushed or committed after the proof is preserved, never deleted.
+The recorded merge proof covers one commit, so cleanup re-verifies before deleting anything: the local branch tip must still equal the proven SHA (`blocked` / `branch-advanced` otherwise) and `ls-remote` must show origin's branch at that same SHA (`blocked` / `remote-branch-advanced` otherwise). Because artifact, worktree, and local-branch removal all happen between that read and the remote deletion, the deletion additionally carries the expected tip itself — `push --force-with-lease="refs/heads/<branch>:<proven-sha>" origin --delete <branch>` — so origin rejects it if the ref moved in that window; a stale-lease rejection is reported as `blocked` / `remote-branch-advanced`. Work pushed or committed after the proof is preserved, never deleted.
 
 Every run writes exactly one JSON record to stdout and keeps human diagnostics on stderr, so an unattended caller never parses free-form text:
 
@@ -252,7 +252,7 @@ Every run writes exactly one JSON record to stdout and keeps human diagnostics o
 
 `merge_mode` is `regular`, `squash`, or `null` when not yet proven; `reason` is a stable token (e.g. `pr-open`, `merge-unprovable`, `worktree-dirty`), never prose. Read the stderr diagnostic for the details behind a `blocked` or `retry`.
 
-Never use forced worktree removal, reset, clean, or force-push during post-merge cleanup. `git branch -D` only via the proven-squash path in `cleanup-merged.sh` (PR `MERGED` + `agent/*` + merge commit in `origin/main` + patch-id equivalence + clean worktree); never by hand. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
+Never use forced worktree removal, reset, clean, or a force-push of content during post-merge cleanup. The single permitted force flag is `--force-with-lease=refs/heads/<branch>:<proven-sha>` on the remote branch deletion, where the explicit lease constrains the delete to the proven tip instead of loosening it — never a bare `--force`, never `--force-with-lease` without an expected SHA, and never on anything but that deletion. `git branch -D` only via the proven-squash path in `cleanup-merged.sh` (PR `MERGED` + `agent/*` + merge commit in `origin/main` + patch-id equivalence + clean worktree); never by hand. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
 
 ---
 

@@ -6,8 +6,11 @@
 # or proven via patch-id equivalence for a squash merge -- see MERGE_MODE
 # below; rebase merges are a documented dead end that stops and asks a
 # human), and its worktree is clean. Never uses forced worktree removal,
-# reset, clean, or force-push. Uses `git branch -D` only via the
-# proven-squash path; never on unproven state.
+# reset, clean, or a force-push of content. Uses `git branch -D` only via
+# the proven-squash path; never on unproven state. The one permitted force
+# flag is `--force-with-lease=refs/heads/<branch>:<proven-sha>` on the
+# remote deletion, where it constrains the delete to the proven tip rather
+# than loosening it.
 #
 # Restart-safe: every knowable guard is evaluated before the first
 # mutation, and a durable journal under the git common directory records
@@ -576,8 +579,33 @@ if ! step_done local-branch; then
 fi
 
 if [ "$pending_remote_branch" -eq 1 ]; then
-  GIT_AUTH push origin --delete "$BRANCH" >&2 \
-    || finish retry remote-delete-failed "unable to delete origin/$BRANCH"
+  # The plan-time SHA comparison goes stale: artifact, worktree and local
+  # branch removal all happen between it and this push. The lease carries
+  # the expected tip into the deletion itself, so origin rejects the push
+  # if the ref moved in that window. Despite the option's name this is the
+  # opposite of a force-push -- a plain `--delete` removes whatever the
+  # ref points at now. This is the only permitted force flag, it is only
+  # ever a deletion, and its expected value is always the proven tip.
+  if ! GIT_AUTH push --force-with-lease="refs/heads/$BRANCH:$head_sha" origin --delete "$BRANCH" >&2; then
+    if remote_ls="$(GIT_AUTH ls-remote --exit-code --heads origin "refs/heads/$BRANCH" 2>/dev/null)"; then
+      ls_remote_rc=0
+    else
+      ls_remote_rc=$?
+    fi
+    case "$ls_remote_rc" in
+      0)
+        remote_sha="$(printf '%s\n' "$remote_ls" | awk 'NR == 1 { print $1 }')"
+        if [ "$remote_sha" != "$head_sha" ]; then
+          finish blocked remote-branch-advanced \
+            "origin/$BRANCH moved to $remote_sha while cleanup was running; refusing to delete unproven work"
+        fi
+        finish retry remote-delete-failed "unable to delete origin/$BRANCH"
+        ;;
+      2) : ;; # already gone: the deletion goal is satisfied
+      *) finish retry remote-delete-failed \
+        "unable to confirm origin/$BRANCH after a failed delete" ;;
+    esac
+  fi
 fi
 if ! step_done remote-branch; then
   mark_done remote-branch
