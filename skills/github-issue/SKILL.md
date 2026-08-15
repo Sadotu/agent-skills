@@ -59,7 +59,7 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
 ```
 
-Report the PR URL to the user now — it is the first thing they see, before any design question is generated. The PR stays **draft** until Phase 6 finalizes it — marked ready on a manual run, or handed to `issue-orchestrator` still draft on a managed run.
+Report the PR URL to the user now — it is the first thing they see, before any design question is generated. The PR stays **draft** until Phase 6 finalizes it, then it is marked ready for the repository owner on both manual and managed runs.
 
 ### Dirty-tree triage (read-only, when the guard trips)
 
@@ -212,10 +212,11 @@ If stale, `git rebase origin/main` (resolve conflicts, drop already-merged commi
 
 - Push the final commits to the existing branch.
 - Update the existing PR body: make the Summary's **Approach** match the actual diff, then append verification results against the acceptance criteria below Design Decisions. Preserve the single `Closes #<number>` line and Summary block. Because the spec and plan are session-local, do not link their paths.
-- Hand off: `scripts/finish-handoff.sh <pr-number> <number>`. (`issue-orchestrator` is a separate, external system — this repo does not create or manage the `agent-running` label itself, only reads it.) On a manual run (the linked issue has no `agent-running` label) this marks the PR ready exactly as before. On a managed run (issue-orchestrator already applied `agent-running` to the linked issue) this instead keeps the PR draft, adds `agent-running` to the PR, and replaces any other phase label with `agent-review` on both issue and PR — issue-orchestrator owns review/CI/merge from there. Safe to rerun after a partial failure; it converges to the same label state.
+- Hand off: `scripts/finish-handoff.sh <pr-number> <number>`. This marks the PR ready for the repository owner on both manual and managed runs. `issue-orchestrator` owns the `agent-running` label while a managed implementation is active and releases it after observing the ready PR. No automated review, repair, approval, or merge phase is started.
 - Report which path it took (its stderr output says so) alongside the branch name and PR URL.
 
 Do not merge unless the user explicitly requests it.
+Approval and merge remain explicit repository-owner actions.
 
 ---
 
@@ -240,7 +241,7 @@ Never use forced worktree removal, reset, clean, or force-push during post-merge
 - **Writing or committing issue artifacts in the primary worktree.** After isolation, every write and commit happens in `<worktree-path>` — never on primary `main`.
 - **More than one `Closes #<number>` in the PR body.** Exactly one closing reference.
 - **Generic `## Summary`.** Problem must reflect the issue; Approach must reflect the diff.
-- **Leaving the PR in draft past a green Phase 6 on a manual run.** Mark it ready once verification passes; on a managed run (issue carries `agent-running`), staying draft is correct — see `scripts/finish-handoff.sh`.
-- **Calling `GH pr ready` directly in Phase 6.** Always go through `scripts/finish-handoff.sh` so a managed run's PR correctly stays draft.
+- **Leaving the PR in draft past a green Phase 6.** Mark it ready once verification passes on both manual and managed runs — see `scripts/finish-handoff.sh`.
+- **Calling `GH pr ready` directly in Phase 6.** Always go through `scripts/finish-handoff.sh` so the handoff remains one explicit, testable step.
 - **Treating a merely closed PR as merged.** Only `MERGED` triggers Phase 7 cleanup.
 - **Silently accepting or suppressing a baseline failure.** In an unattended run a pre-existing baseline failure may be passed only when `scripts/baseline-triage.sh` returns `CONTINUE`, it is documented in the PR, and it is re-verified in Phase 5 — never ignored, excluded, weakened, converted to a pass, or marked ready on a regression.
