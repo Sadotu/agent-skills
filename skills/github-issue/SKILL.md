@@ -171,6 +171,18 @@ Follow `superpowers:test-driven-development` for every behavior change unless th
 
 **Reject task diffs that are more complex than required; send them back for simplification.**
 
+## Simplicity constraints
+
+- Implement only the behavior explicitly described in this issue.
+- Do not add retries, backoff, compatibility layers, additional commands,
+  speculative abstractions, or extension points unless explicitly required.
+- If a dependency is not ready, stop and report the dependency; do not create
+  a temporary alternative.
+- Every new production module and persistent state field must map to a named
+  acceptance criterion.
+- If the implementation needs more than five production files or introduces
+  a new state machine, pause and present the simpler alternative first.
+
 ---
 
 ## Phase 5 — Verify Against the Issue
