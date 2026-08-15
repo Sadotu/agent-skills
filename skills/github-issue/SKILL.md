@@ -232,7 +232,9 @@ Run it directly — this is the canonical Phase 7 cleanup for a manual run and f
 scripts/cleanup-merged.sh <pr-number> <issue-number>
 ```
 
-It evaluates every knowable guard before the first mutation, then records each completed step in a durable journal at `$(git rev-parse --git-common-dir)/github-issue/cleanup/pr-<pr-number>.state`. An interrupted run therefore converges when rerun instead of failing on the state it already changed. A missing worktree, local branch, or recorded artifact is accepted **only** when that journal proves a prior run removed it; otherwise cleanup stops and asks.
+It evaluates every knowable guard before the first mutation, then records each step in a durable journal at `$(git rev-parse --git-common-dir)/github-issue/cleanup/pr-<pr-number>.state` — the intent (`attempted=`) before the mutation and the completion (`done=`) after it, so a crash in between still converges on the next run. A missing worktree, local branch, or recorded artifact is accepted **only** when that journal proves this workflow removed it; otherwise cleanup stops and asks.
+
+The recorded merge proof covers one commit, so cleanup re-verifies before deleting anything: the local branch tip must still equal the proven SHA (`blocked` / `branch-advanced` otherwise) and `ls-remote` must show origin's branch at that same SHA (`blocked` / `remote-branch-advanced` otherwise). Work pushed or committed after the proof is preserved, never deleted.
 
 Every run writes exactly one JSON record to stdout and keeps human diagnostics on stderr, so an unattended caller never parses free-form text:
 

@@ -147,6 +147,7 @@ journal_file="$git_common_dir/github-issue/cleanup/pr-${pr_number}.state"
 # --- Durable evidence: what a previous run already completed ---
 STEPS=(artifacts worktree local-branch remote-branch main issue manifest)
 declare -a done_steps=()
+declare -a attempted_steps=()
 declare -a journal_artifacts=()
 journal_present=0
 journal_status=""
@@ -157,6 +158,18 @@ step_done() {
   local step="$1" done
   for done in "${done_steps[@]:-}"; do
     if [ "$done" = "$step" ]; then return 0; fi
+  done
+  return 1
+}
+
+# A step is "attempted" once its intent is durable but its completion is
+# not: the mutation may have landed just before the process died. Seeing
+# that step's post-state already satisfied is then evidence this workflow
+# produced it, so the step converges instead of refusing.
+step_attempted() {
+  local step="$1" attempted
+  for attempted in "${attempted_steps[@]:-}"; do
+    if [ "$attempted" = "$step" ]; then return 0; fi
   done
   return 1
 }
@@ -192,6 +205,10 @@ if [ -f "$journal_file" ]; then
       merge_sha) : ;;
       worktree) journal_worktree="$value" ;;
       artifact) journal_artifacts+=("$value") ;;
+      attempted)
+        known_step "$value" || finish blocked journal-invalid "Unknown cleanup step in journal: $value"
+        attempted_steps+=("$value")
+        ;;
       done)
         known_step "$value" || finish blocked journal-invalid "Unknown cleanup step in journal: $value"
         done_steps+=("$value")
@@ -263,6 +280,19 @@ if [ "$journal_present" -eq 0 ]; then
     fi
   fi
 fi
+# --- Guard: the recorded proof only covers the commit it was made
+#     against. A branch that moved since then carries work this run never
+#     proved landed, so refuse rather than delete it. ---
+if [ "$journal_present" -eq 1 ] && [ "$have_local_branch" -eq 1 ]; then
+  if [ -z "$journal_head_sha" ]; then
+    finish blocked head-sha-unknown \
+      "Cleanup journal records no branch tip to re-verify $BRANCH against"
+  fi
+  if [ "$head_sha" != "$journal_head_sha" ]; then
+    finish blocked branch-advanced \
+      "Local branch $BRANCH is now $head_sha but cleanup proved $journal_head_sha; refusing to delete unproven work"
+  fi
+fi
 if [ -z "$head_sha" ]; then head_sha="$journal_head_sha"; fi
 
 # --- Plan: evaluate every knowable guard before the first mutation ---
@@ -280,12 +310,14 @@ registered_worktree="$(git -C "$WORKSPACE" worktree list --porcelain | awk -v re
 ')"
 issue_worktree=""
 
-if step_done worktree; then
+if step_done worktree || { step_attempted worktree && [ -z "$registered_worktree" ]; }; then
   if [ -n "$registered_worktree" ]; then
     finish blocked worktree-recreated \
       "A worktree for $BRANCH exists again at $registered_worktree though cleanup already removed one"
   fi
+  worktree_converged=1
 else
+  worktree_converged=0
   if [ -z "$registered_worktree" ]; then
     finish blocked worktree-missing \
       "No worktree is registered for $BRANCH and no cleanup journal proves a prior removal"
@@ -330,7 +362,7 @@ validate_artifact_paths() {
   done
 }
 
-if step_done artifacts || step_done worktree; then
+if step_done artifacts || [ "$worktree_converged" -eq 1 ]; then
   # Either this run's predecessor removed them, or they went with the
   # worktree that predecessor already removed.
   pending_artifacts=0
@@ -348,6 +380,9 @@ else
 
   for artifact_path in "${session_artifacts[@]:-}"; do
     if [ -z "$artifact_path" ]; then continue; fi
+    if [ ! -e "$issue_worktree/$artifact_path" ] && step_attempted artifacts; then
+      continue
+    fi
     if [ ! -f "$issue_worktree/$artifact_path" ] || [ -L "$issue_worktree/$artifact_path" ]; then
       finish blocked artifact-missing \
         "$(printf 'Recorded artifact is missing or not a regular file: %q' "$artifact_path")"
@@ -381,7 +416,7 @@ else
   if [ "${#session_artifacts[@]}" -gt 0 ]; then pending_artifacts=1; fi
 fi
 
-if step_done local-branch; then
+if step_done local-branch || { step_attempted local-branch && [ "$have_local_branch" -eq 0 ]; }; then
   if [ "$have_local_branch" -eq 1 ]; then
     finish blocked local-branch-recreated \
       "Local branch $BRANCH exists again though cleanup already deleted it"
@@ -394,8 +429,20 @@ else
   pending_local_branch=1
 fi
 
+# --- Guard: the remote ref must still be the tip the merge proof covers.
+#     Existence alone proves nothing -- the branch may have been advanced
+#     with commits that never landed in main. ---
 if ! step_done remote-branch; then
-  if GIT_AUTH ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
+  if remote_ls="$(GIT_AUTH ls-remote --exit-code --heads origin "refs/heads/$BRANCH" 2>/dev/null)"; then
+    remote_sha="$(printf '%s\n' "$remote_ls" | awk 'NR == 1 { print $1 }')"
+    if [ -z "$head_sha" ] || [ -z "$remote_sha" ]; then
+      finish blocked remote-branch-unverifiable \
+        "Cannot re-verify origin/$BRANCH against the proven branch tip"
+    fi
+    if [ "$remote_sha" != "$head_sha" ]; then
+      finish blocked remote-branch-advanced \
+        "origin/$BRANCH is now $remote_sha but cleanup proved $head_sha; refusing to delete unproven work"
+    fi
     pending_remote_branch=1
   else
     ls_remote_rc=$?
@@ -451,12 +498,22 @@ journal_write() {
     for artifact in "${session_artifacts[@]:-}"; do
       if [ -n "$artifact" ]; then printf 'artifact=%s\n' "$artifact"; fi
     done
+    for step in "${attempted_steps[@]:-}"; do
+      if [ -n "$step" ]; then printf 'attempted=%s\n' "$step"; fi
+    done
     for step in "${done_steps[@]:-}"; do
       if [ -n "$step" ]; then printf 'done=%s\n' "$step"; fi
     done
     printf 'status=%s\n' "$status"
   } > "$tmp"
   mv -- "$tmp" "$journal_file"
+}
+
+mark_attempted() {
+  if ! step_attempted "$1"; then
+    attempted_steps+=("$1")
+    journal_write in-progress
+  fi
 }
 
 mark_done() {
@@ -483,6 +540,7 @@ fi
 # done either way: a step that converged before this run started is just
 # as complete as one this run performed.
 if [ "$pending_artifacts" -eq 1 ]; then
+  mark_attempted artifacts
   for artifact_path in "${session_artifacts[@]}"; do
     if [ -e "$issue_worktree/$artifact_path" ]; then rm -- "$issue_worktree/$artifact_path"; fi
   done
@@ -492,6 +550,7 @@ if ! step_done artifacts; then
 fi
 
 if [ "$pending_worktree" -eq 1 ]; then
+  mark_attempted worktree
   git worktree remove "$issue_worktree" >&2
   git worktree prune >&2
 fi
@@ -500,6 +559,7 @@ if ! step_done worktree; then
 fi
 
 if [ "$pending_local_branch" -eq 1 ]; then
+  mark_attempted local-branch
   if [ "$MERGE_MODE" = regular ]; then
     git branch -d "$BRANCH" >&2
   else

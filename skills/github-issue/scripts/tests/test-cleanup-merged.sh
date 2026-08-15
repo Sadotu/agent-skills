@@ -796,6 +796,216 @@ test_case20_restart_before_journal_finalize() {
   assert_no_forbidden_git "case20: no forbidden git command issued"
 }
 
+# write_journal <pr> <merge-mode> <head-sha> <status> [key:value ...]
+# Hand-builds the durable evidence a run would have left at a chosen
+# instant, including the crash windows no external command can be failed
+# in (between a successful `rm`/`branch -d` and the journal write).
+write_journal() {
+  local pr="$1" mode="$2" head="$3" status="$4" journal entry
+  shift 4
+  journal="$(journal_path "$pr")"
+  mkdir -p "$(dirname "$journal")"
+  {
+    printf 'pr=%s\n' "$pr"
+    printf 'issue=%s\n' "$pr"
+    printf 'branch=%s\n' "$BRANCH"
+    printf 'merge_mode=%s\n' "$mode"
+    printf 'head_sha=%s\n' "$head"
+    for entry in "$@"; do
+      printf '%s=%s\n' "${entry%%:*}" "${entry#*:}"
+    done
+    printf 'status=%s\n' "$status"
+  } > "$journal"
+}
+
+# --- Case 27: `git worktree remove` succeeds, the journal marker never
+# becomes durable. The recorded intent plus the observed post-state must
+# converge; without it the rerun would refuse with worktree-missing. ---
+test_case27_crash_after_worktree_removal() {
+  setup_artifact_fixture 36 worktree-window
+  land_branch_on_origin_only
+
+  GIT_FAIL_MATCH="worktree prune" \
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 36 36 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset GIT_FAIL_MATCH STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  local journal
+  journal="$(journal_path 36)"
+  assert_eq "case27: interrupted run reports a retryable failure" 30 "$rc"
+  assert_true "case27: the removal really happened" [ ! -e "$WT" ]
+  assert_true "case27: intent to remove the worktree is durable" \
+    grep -qx 'attempted=worktree' "$journal"
+  assert_false "case27: completion was never recorded" \
+    grep -qx 'done=worktree' "$journal"
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 36 36 >"$BASE/out.log" 2>&1
+  rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case27: restart converges" 0 "$rc"
+  assert_record "case27: restart reports cleaned" status cleaned
+  assert_fully_cleaned "case27" 36
+  assert_no_forbidden_git "case27: no forbidden git command issued"
+}
+
+# --- Case 28: artifacts deleted, `done=artifacts` never durable ---
+test_case28_crash_after_artifact_removal() {
+  setup_artifact_fixture 37 artifact-window
+  land_branch_on_origin_only
+  local head design plan
+  head="$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
+  design=docs/superpowers/specs/2026-08-15-artifact-window-design.md
+  plan=docs/superpowers/plans/2026-08-15-artifact-window.md
+  rm -- "$WT/$design" "$WT/$plan"
+
+  # 28a: the intent was recorded -> the missing artifacts converge.
+  write_journal 37 regular "$head" in-progress \
+    "artifact:$design" "artifact:$plan" attempted:artifacts
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 37 37 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case28a: restart converges after an unjournaled artifact removal" 0 "$rc"
+  assert_record "case28a: restart reports cleaned" status cleaned
+  assert_fully_cleaned "case28a" 37
+
+  # 28b: no recorded intent -> the same state must refuse.
+  setup_artifact_fixture 38 artifact-unproven
+  land_branch_on_origin_only
+  head="$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
+  design=docs/superpowers/specs/2026-08-15-artifact-unproven-design.md
+  plan=docs/superpowers/plans/2026-08-15-artifact-unproven.md
+  rm -- "$WT/$design" "$WT/$plan"
+  write_journal 38 regular "$head" in-progress "artifact:$design" "artifact:$plan"
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 38 38 >"$BASE/out.log" 2>&1
+  rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case28b: blocked without recorded intent" 20 "$rc"
+  assert_record "case28b: reason names the missing artifact" reason artifact-missing
+  assert_true "case28b: worktree preserved" [ -d "$WT" ]
+  assert_true "case28b: local branch preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
+# --- Case 29: local branch deleted, `done=local-branch` never durable ---
+test_case29_crash_after_local_branch_deletion() {
+  new_fixture 39 branch-window
+  land_branch_on_origin_only
+  local head
+  head="$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
+  git -C "$CLONE" worktree remove "$WT"
+  git -C "$CLONE" branch -q -d "$BRANCH"
+
+  # 29a: the intent was recorded -> the missing branch converges.
+  write_journal 39 regular "$head" in-progress \
+    attempted:artifacts done:artifacts attempted:worktree done:worktree attempted:local-branch
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 39 39 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case29a: restart converges after an unjournaled branch deletion" 0 "$rc"
+  assert_record "case29a: restart reports cleaned" status cleaned
+  assert_false "case29a: remote branch deleted" \
+    bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_true "case29a: journal records completion" \
+    grep -qx 'status=cleaned' "$(journal_path 39)"
+
+  # 29b: no recorded intent -> the same state must refuse.
+  new_fixture 40 branch-unproven
+  land_branch_on_origin_only
+  head="$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
+  git -C "$CLONE" worktree remove "$WT"
+  git -C "$CLONE" branch -q -d "$BRANCH"
+  write_journal 40 regular "$head" in-progress \
+    attempted:artifacts done:artifacts attempted:worktree done:worktree
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 40 40 >"$BASE/out.log" 2>&1
+  rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case29b: blocked without recorded intent" 20 "$rc"
+  assert_record "case29b: reason names the missing local branch" reason local-branch-missing
+  assert_true "case29b: remote branch preserved" \
+    bash -c "git -C '$ORIGIN' show-ref --verify --quiet refs/heads/$BRANCH"
+}
+
+# --- Case 30: an interrupted cleanup must not delete a branch that moved
+# after its merge proof was established. ---
+test_case30_branch_advanced_after_proof() {
+  new_fixture --content 41 branch-advanced
+  local merge_sha
+  merge_sha="$(push_direct_commit_to_main feature.txt "feature line")"
+
+  GIT_FAIL_MATCH="worktree remove" \
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_PR_MERGE_COMMIT="$merge_sha" \
+  STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 41 41 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset GIT_FAIL_MATCH STUB_PR_STATE STUB_PR_HEAD_REF STUB_PR_MERGE_COMMIT STUB_ISSUE_STATE
+  assert_eq "case30: interrupted run reports a retryable failure" 30 "$rc"
+  assert_true "case30: journal records the proven squash" \
+    grep -qx 'merge_mode=squash' "$(journal_path 41)"
+
+  echo "unmerged work" > "$WT/rescue.txt"
+  git -C "$WT" add rescue.txt
+  git -C "$WT" commit -q -m "work added after the proof"
+  local advanced_sha
+  advanced_sha="$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_PR_MERGE_COMMIT="$merge_sha" \
+  STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 41 41 >"$BASE/out.log" 2>&1
+  rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_PR_MERGE_COMMIT STUB_ISSUE_STATE
+
+  assert_eq "case30: blocked when the branch advanced past the proof" 20 "$rc"
+  assert_record "case30: status is blocked" status blocked
+  assert_record "case30: reason names the advanced branch" reason branch-advanced
+  assert_true "case30: worktree preserved" [ -d "$WT" ]
+  assert_true "case30: unmerged work preserved" [ -f "$WT/rescue.txt" ]
+  assert_eq "case30: branch still points at the new work" "$advanced_sha" \
+    "$(git -C "$CLONE" rev-parse "refs/heads/$BRANCH")"
+  assert_no_forbidden_git "case30: no forbidden git command issued"
+}
+
+# --- Case 31: a remote branch advanced past the proven tip is preserved ---
+test_case31_remote_branch_advanced() {
+  new_fixture 42 remote-advanced
+  merge_branch_into_origin_main
+
+  git clone -q "$ORIGIN" "$BASE/other"
+  git -C "$BASE/other" config user.email test@example.com
+  git -C "$BASE/other" config user.name "Test User"
+  git -C "$BASE/other" checkout -q -b "$BRANCH" "origin/$BRANCH"
+  git -C "$BASE/other" commit -q --allow-empty -m "remote-only work"
+  git -C "$BASE/other" push -q origin "$BRANCH"
+  local remote_sha
+  remote_sha="$(git -C "$ORIGIN" rev-parse "refs/heads/$BRANCH")"
+
+  STUB_PR_STATE="MERGED" STUB_PR_HEAD_REF="$BRANCH" STUB_ISSUE_STATE="OPEN" \
+    run_cleanup "$CLONE" 42 42 >"$BASE/out.log" 2>&1
+  local rc=$?
+  unset STUB_PR_STATE STUB_PR_HEAD_REF STUB_ISSUE_STATE
+
+  assert_eq "case31: blocked when the remote branch advanced past the proof" 20 "$rc"
+  assert_record "case31: status is blocked" status blocked
+  assert_record "case31: reason names the advanced remote branch" reason remote-branch-advanced
+  assert_eq "case31: remote branch preserved at its new tip" "$remote_sha" \
+    "$(git -C "$ORIGIN" rev-parse "refs/heads/$BRANCH")"
+  assert_true "case31: local branch preserved" \
+    bash -c "git -C '$CLONE' show-ref --verify --quiet refs/heads/$BRANCH"
+  assert_true "case31: worktree preserved" [ -d "$WT" ]
+}
+
 # --- Case 26: crash between closing the issue and removing the manifest ---
 test_case26_restart_before_manifest_removal() {
   setup_artifact_fixture 35 restart-manifest
@@ -963,6 +1173,11 @@ test_case22_local_branch_missing_without_evidence
 test_case23_dirty_primary_main
 test_case24_diverged_main
 test_case25_no_forbidden_git_in_source
+test_case27_crash_after_worktree_removal
+test_case28_crash_after_artifact_removal
+test_case29_crash_after_local_branch_deletion
+test_case30_branch_advanced_after_proof
+test_case31_remote_branch_advanced
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
