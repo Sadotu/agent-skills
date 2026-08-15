@@ -216,6 +216,7 @@ If stale, `git rebase origin/main` (resolve conflicts, drop already-merged commi
 - Report which path it took (its stderr output says so) alongside the branch name and PR URL.
 
 Do not merge unless the user explicitly requests it.
+Approval and merge remain explicit repository-owner actions.
 
 ---
 
