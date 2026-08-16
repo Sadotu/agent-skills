@@ -273,37 +273,31 @@ test_case6_helper_failure_stops_network_git() {
   assert_true "case6: no worktree created" [ ! -e "$wt" ]
 }
 
-# --- Case 5: explicit base-ref -> worktree branches from it, not origin/main ---
-test_case5_custom_base_ref() {
+# --- Case 5: a fifth argument is rejected; isolation is origin/main-only ---
+test_case5_rejects_fifth_argument() {
   new_fixture
-  # Advance a second branch on the fake origin, distinct from main.
-  local other="$BASE/other-clone"
-  git clone -q "$ORIGIN" "$other"
-  git -C "$other" config user.email test@example.com
-  git -C "$other" config user.name "Test User"
-  git -C "$other" config core.hooksPath "$BASE/no-hooks"
-  git -C "$other" checkout -q -b stacked-branch
-  git -C "$other" commit -q --allow-empty -m "stacked branch commit"
-  git -C "$other" push -q origin stacked-branch
+  # Make the obsolete stacked base resolvable so the old five-argument
+  # implementation would succeed; the rejection must come from arity.
+  git -C "$ORIGIN" update-ref refs/heads/stacked-branch \
+    "$(git -C "$ORIGIN" rev-parse refs/heads/main)"
   local wt="$BASE/wt"
 
-  run_isolate 9 stacked-slug "$wt" "Title" "origin/stacked-branch" \
+  run_isolate 9 origin-main-only "$wt" "Title" "origin/stacked-branch" \
     >"$BASE/out.log" 2>&1
   local rc=$?
 
-  assert_eq "case5: exits zero" 0 "$rc"
-  assert_true "case5: worktree created at target path" [ -d "$wt" ]
-  assert_true "case5: worktree branches from stacked-branch, not main" \
-    bash -c "[ \"\$(git -C '$wt' log -1 --skip 1 --format=%s)\" = 'stacked branch commit' ]"
-  assert_eq "case5: worktree exactly one commit ahead of origin/stacked-branch" 1 \
-    "$(git -C "$wt" rev-list --count origin/stacked-branch..HEAD)"
+  [ "$rc" -ne 0 ] && ok "case5: fifth argument is rejected" \
+    || fail "case5: fifth argument is rejected (got rc=$rc)"
+  assert_true "case5: rejected invocation creates no worktree" [ ! -e "$wt" ]
+  assert_eq "case5: rejected invocation performs no network git" "" "$(cat "$GIT_NETWORK_LOG")"
+  assert_eq "case5: rejected invocation does not call gh" "" "$(cat "$GH_LOG")"
 }
 
 test_case1_dirty_primary_tree
 test_case2_diverged_main
 test_case3_not_on_main
 test_case4_happy_path
-test_case5_custom_base_ref
+test_case5_rejects_fifth_argument
 test_case6_helper_failure_stops_network_git
 
 echo "--- $PASS passed, $FAIL failed ---"
