@@ -22,7 +22,12 @@ if [ "$#" -ne 1 ] || ! [[ "$1" =~ ^[0-9]+$ ]]; then
 fi
 
 pr_number="$1"
-skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+workspace="$(git rev-parse --show-toplevel)" || exit $?
+skill_dir="$workspace/skills/github-pr-cleanup"
+if [ ! -x "$skill_dir/scripts/cleanup.sh" ]; then
+  echo "github-pr-cleanup is not installed in the current worktree" >&2
+  exit 2
+fi
 origin="$(git remote get-url origin)" || exit $?
 case "$origin" in
   https://github.com/*) repo="${origin#https://github.com/}" ;;
@@ -32,7 +37,12 @@ case "$origin" in
 esac
 repo="${repo%/}"
 repo="${repo%.git}"
-case "$repo" in */*) ;; *) echo "invalid GitHub origin: expected owner/repo on github.com" >&2; exit 2 ;; esac
+owner="${repo%%/*}"
+repository="${repo#*/}"
+if [ -z "$owner" ] || [ -z "$repository" ] || [ "$repository" = "$repo" ] || [[ "$repository" = */* ]]; then
+  echo "invalid GitHub origin: expected exactly owner/repo on github.com" >&2
+  exit 2
+fi
 
 token_helper="${GH_APP_TOKEN_HELPER:-/opt/agent-devcontainer/gh-app-token.sh}"
 if [ ! -x "$token_helper" ]; then

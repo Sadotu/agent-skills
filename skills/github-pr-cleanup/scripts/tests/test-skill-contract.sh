@@ -58,8 +58,9 @@ fi
 new_fixture() {
   BASE="$(mktemp -d)"
   TMP_DIRS+=("$BASE")
-  mkdir -p "$BASE/skill/scripts/tests" "$BASE/bin"
-  cp -R "$SKILL_DIR/." "$BASE/skill/"
+  FIXTURE_SKILL="$BASE/workspace/skills/github-pr-cleanup"
+  mkdir -p "$FIXTURE_SKILL/scripts/tests" "$BASE/bin"
+  cp -R "$SKILL_DIR/." "$FIXTURE_SKILL/"
 
   # Execute the SKILL-level manual workflow, while replacing cleanup.sh only
   # at its real two-argument Worktree Warden boundary.
@@ -68,9 +69,8 @@ new_fixture() {
     /^<!-- github-pr-cleanup-manual-entry:end -->$/ { exit }
     in_block && /^```(bash)?$/ { next }
     in_block { print }
-  ' "$SKILL_DIR/SKILL.md" > "$BASE/skill/manual-entry.sh"
-  chmod +x "$BASE/skill/manual-entry.sh"
-  cat > "$BASE/skill/scripts/cleanup.sh" <<'SHIM'
+  ' "$SKILL_DIR/SKILL.md" > "$BASE/manual-entry.sh"
+  cat > "$FIXTURE_SKILL/scripts/cleanup.sh" <<'SHIM'
 #!/usr/bin/env bash
 if [ "$#" -ne 2 ]; then
   echo "cleanup stub requires exactly two arguments" >&2
@@ -80,7 +80,7 @@ fi
   printf '%s\n' "$CLEANUP_STUB_OUTPUT"
   exit "$CLEANUP_STUB_STATUS"
 SHIM
-  chmod +x "$BASE/skill/scripts/cleanup.sh"
+  chmod +x "$FIXTURE_SKILL/scripts/cleanup.sh"
 
   cat > "$BASE/bin/gh" <<'SHIM'
 #!/usr/bin/env bash
@@ -91,7 +91,8 @@ SHIM
   cat > "$BASE/bin/git" <<'SHIM'
 #!/usr/bin/env bash
 case "$*" in
-  'remote get-url origin') echo 'https://github.com/example/project.git' ;;
+  'rev-parse --show-toplevel') echo "$FIXTURE_WORKSPACE" ;;
+  'remote get-url origin') echo "${TEST_ORIGIN:-https://github.com/example/project.git}" ;;
   'worktree list --porcelain') printf 'worktree %s\n' "$PWD" ;;
   *) exit 92 ;;
 esac
@@ -103,16 +104,18 @@ SHIM
   chmod +x "$BASE/bin/gh" "$BASE/bin/git" "$BASE/token"
   GH_CALL_LOG="$BASE/gh.log"
   CLEANUP_CALL_LOG="$BASE/cleanup.log"
+  TEST_ORIGIN='https://github.com/example/project.git'
   : > "$GH_CALL_LOG"
   : > "$CLEANUP_CALL_LOG"
 }
 
 run_manual() {
   set +e
-  RUN_OUTPUT="$(cd "$BASE/skill" && PATH="$BASE/bin:$PATH" GH_CALL_LOG="$GH_CALL_LOG" GH_RESULT="$GH_RESULT" \
+  RUN_OUTPUT="$(cd "$BASE/workspace" && PATH="$BASE/bin:$PATH" GH_CALL_LOG="$GH_CALL_LOG" GH_RESULT="$GH_RESULT" \
     GH_APP_TOKEN_HELPER="$BASE/token" CLEANUP_CALL_LOG="$CLEANUP_CALL_LOG" \
     CLEANUP_STUB_OUTPUT="$CLEANUP_STUB_OUTPUT" CLEANUP_STUB_STATUS="$CLEANUP_STUB_STATUS" \
-    bash "$BASE/skill/manual-entry.sh" "$@" 2>&1)"
+    FIXTURE_WORKSPACE="$BASE/workspace" TEST_ORIGIN="$TEST_ORIGIN" \
+    bash -c "$(cat "$BASE/manual-entry.sh")" github-pr-cleanup "$@" 2>&1)"
   RUN_STATUS=$?
   set -e
 }
@@ -139,6 +142,16 @@ if [ -f "$ENTRY" ] && [ -f "$SKILL_DIR/SKILL.md" ] \
   [ "$RUN_STATUS" -ne 0 ] && ok "manual entry rejects a nonnumeric PR" || fail "manual entry rejects a nonnumeric PR"
   assert_eq "nonnumeric PR does not query GitHub" 0 "$(wc -l < "$GH_CALL_LOG" | tr -d ' ')"
   assert_eq "nonnumeric PR does not invoke cleanup" 0 "$(wc -l < "$CLEANUP_CALL_LOG" | tr -d ' ')"
+
+  new_fixture
+  TEST_ORIGIN='https://github.com/example/project/nested.git'
+  GH_RESULT=$'MERGED\t1\t47'
+  CLEANUP_STUB_OUTPUT=unexpected
+  CLEANUP_STUB_STATUS=0
+  run_manual 101
+  [ "$RUN_STATUS" -ne 0 ] && ok "manual entry rejects a nested repository path" || fail "manual entry rejects a nested repository path"
+  assert_eq "nested repository path does not query GitHub" 0 "$(wc -l < "$GH_CALL_LOG" | tr -d ' ')"
+  assert_eq "nested repository path does not invoke cleanup" 0 "$(wc -l < "$CLEANUP_CALL_LOG" | tr -d ' ')"
 
   new_fixture
   GH_RESULT=$'MERGED\t1\t47'
