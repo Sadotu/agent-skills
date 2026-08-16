@@ -133,6 +133,15 @@ if [ -f "$ENTRY" ] && [ -f "$SKILL_DIR/SKILL.md" ] \
 
   new_fixture
   GH_RESULT=$'MERGED\t1\t47'
+  CLEANUP_STUB_OUTPUT=unexpected
+  CLEANUP_STUB_STATUS=0
+  run_manual abc
+  [ "$RUN_STATUS" -ne 0 ] && ok "manual entry rejects a nonnumeric PR" || fail "manual entry rejects a nonnumeric PR"
+  assert_eq "nonnumeric PR does not query GitHub" 0 "$(wc -l < "$GH_CALL_LOG" | tr -d ' ')"
+  assert_eq "nonnumeric PR does not invoke cleanup" 0 "$(wc -l < "$CLEANUP_CALL_LOG" | tr -d ' ')"
+
+  new_fixture
+  GH_RESULT=$'MERGED\t1\t47'
   CLEANUP_STUB_OUTPUT='{"status":"retry","reason":"preserved"}'
   CLEANUP_STUB_STATUS=23
   run_manual 101
