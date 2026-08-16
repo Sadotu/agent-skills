@@ -44,11 +44,33 @@ mapfile -t issue_cleanup < <(find "$ISSUE_DIR" -type f \( -name 'cleanup.sh' -o 
 assert_eq "github-issue contains no cleanup implementation or wrapper" 0 "${#issue_cleanup[@]}"
 
 if [ -f "$SKILL_DIR/SKILL.md" ]; then
-  if grep -Eq 'scripts/cleanup\.sh[[:space:]]+<pr-number>([^<]|$)' "$SKILL_DIR/SKILL.md"; then
+  if grep -Eq '^[[:space:]]*/github-pr-cleanup[[:space:]]+<pr-number>[[:space:]]*$' "$SKILL_DIR/SKILL.md"; then
     ok "manual documentation exposes a one-argument invocation"
   else
     fail "manual documentation exposes a one-argument invocation"
   fi
+fi
+
+# `/github-pr-cleanup` is the manual skill boundary; cleanup.sh's two-argument
+# interface remains available to Worktree Warden. Model the documented manual
+# argument gate independently so its arity cannot be conflated with the script.
+manual_argument_gate() {
+  [ "$#" -eq 1 ] && [[ "$1" =~ ^[0-9]+$ ]]
+}
+if manual_argument_gate; then
+  fail "manual skill rejects zero arguments"
+else
+  ok "manual skill rejects zero arguments"
+fi
+if manual_argument_gate 101 47; then
+  fail "manual skill rejects two arguments"
+else
+  ok "manual skill rejects two arguments"
+fi
+if manual_argument_gate 101; then
+  ok "manual skill accepts exactly one numeric PR argument"
+else
+  fail "manual skill accepts exactly one numeric PR argument"
 fi
 
 new_fixture() {
