@@ -183,6 +183,16 @@ Follow `superpowers:test-driven-development` for every behavior change unless th
 - If the implementation needs more than five production files or introduces
   a new state machine, pause and present the simpler alternative first.
 
+## Behavioral verification constraints
+
+- Verify acceptance criteria through observable behavior at the smallest
+  practical boundary. Source text, generated arguments, or mock calls alone
+  are not proof of runtime behavior.
+- For wrappers and integrations, test at least one realistic failure beyond
+  the success check and preserve the underlying exit status.
+- Do not add test infrastructure solely for this verification. If the relevant
+  boundary is unavailable, report the gap instead of claiming it was verified.
+
 ---
 
 ## Phase 5 — Verify Against the Issue
