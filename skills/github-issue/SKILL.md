@@ -53,7 +53,7 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 
 **CRITICAL — synchronize before writing or committing issue work.** `git fetch` updates `origin/main`, not local `main`. Committing in the primary worktree before isolation pollutes local `main` and makes it diverge.
 
-`scripts/isolate.sh` first checks that the primary worktree is on `main`, clean, and not diverged, before any mutation. It then fetches, may fast-forward clean local `main`, branches from `origin/main`, creates the worktree, and opens the draft PR. On a guard failure, report the exact condition and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there unless it explicitly inspects the primary worktree.
+`scripts/isolate.sh` checks the current branch and cleanliness before touching tracked primary-worktree content or creating issue work. It then fetches (updating remote refs), rejects a diverged `main`, may fast-forward a clean local `main`, branches from `origin/main`, creates the worktree, and opens the draft PR. These guards preserve user work and prevent issue-work mutation on an unsafe base; they do not make synchronization read-only. On failure, diagnose the condition below and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there unless it explicitly inspects the primary worktree.
 
 ```bash
 scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
@@ -61,9 +61,9 @@ scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>
 
 Report the PR URL before generating design questions. It stays draft until Phase 6.
 
-### Dirty-tree triage (read-only, when the guard trips)
+### Isolation-guard diagnosis (read-only)
 
-If isolation fails, inspect the reported guard. For a dirty primary `main`, run:
+If isolation fails, inspect the primary worktree with `git branch --show-current` and `git status --porcelain`. The guards run in this order: a branch other than `main` means wrong branch; `main` with nonempty porcelain means dirty main; if both checks pass but the synchronization guard fails, `main` is diverged. For dirty main, run:
 
 ```bash
 scripts/diagnose-dirty-main.sh
