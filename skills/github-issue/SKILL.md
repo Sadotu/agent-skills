@@ -53,7 +53,7 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 
 **CRITICAL — synchronize before writing or committing issue work.** `git fetch` updates `origin/main`, not local `main`. Committing in the primary worktree before isolation pollutes local `main` and makes it diverge.
 
-`scripts/isolate.sh` first checks that the primary worktree is on `main`, clean, and not diverged, before any mutation. It then fetches, may fast-forward clean local `main`, branches from `origin/main`, creates the worktree, and opens the draft PR. On a guard failure, report the exact condition and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there.
+`scripts/isolate.sh` first checks that the primary worktree is on `main`, clean, and not diverged, before any mutation. It then fetches, may fast-forward clean local `main`, branches from `origin/main`, creates the worktree, and opens the draft PR. On a guard failure, report the exact condition and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there unless it explicitly inspects the primary worktree.
 
 ```bash
 scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
@@ -218,10 +218,3 @@ In the devcontainer, Worktree Warden cleans the terminal PR automatically.
 Outside it, run `/github-pr-cleanup <pr-number>` after the PR is merged or closed.
 
 ---
-
-## Red Flags — STOP
-
-- **Bypassing an isolation guard.** Do not stash, reset, clean, or otherwise alter pre-existing primary-worktree state.
-- **Writing issue work in the primary worktree.** Every issue write and commit belongs in `<worktree-path>`.
-- **More than one `Closes #<number>` in the PR body.** Exactly one closing reference.
-- **Leaving the PR in draft past a green Phase 6, or calling `GH pr ready` directly.** Always hand off through `scripts/finish-handoff.sh`, so the handoff stays one explicit, testable step.

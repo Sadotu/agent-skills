@@ -60,6 +60,11 @@ for phase in 1 2 3 4 5 6; do
   assert_eq "Phase $phase heading appears exactly once" 1 \
     "$(grep -Ec "^## Phase $phase([[:space:]]|—)" "$SKILL")"
 done
+if grep -Fq 'unless it explicitly inspects the primary worktree' "$SKILL"; then
+  ok "post-isolation commands may explicitly inspect the primary worktree"
+else
+  fail "post-isolation commands may explicitly inspect the primary worktree"
+fi
 word_count="$(wc -w < "$SKILL" | tr -d ' ')"
 if [ "$word_count" -lt 2000 ]; then
   ok "SKILL.md is under 2000 words"
