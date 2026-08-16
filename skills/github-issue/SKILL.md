@@ -63,7 +63,7 @@ Report the PR URL before generating design questions. It stays draft until Phase
 
 ### Isolation-guard diagnosis (read-only)
 
-If isolation fails, inspect the primary worktree with `git branch --show-current` and `git status --porcelain`. The guards run in this order: a branch other than `main` means wrong branch; `main` with nonempty porcelain means dirty main; if both checks pass but the synchronization guard fails, `main` is diverged. For dirty main, run:
+If isolation fails, inspect the primary worktree with `git branch --show-current` and `git status --porcelain`. The first guards run in this order: a branch other than `main` means wrong branch; `main` with nonempty porcelain means dirty main. After both pass and fetch succeeds, only a failing `git merge-base --is-ancestor main origin/main` establishes that `main` diverged. For any helper, fetch, worktree, commit, push, or PR failure, report that actual command and condition instead; App-auth failures require `/setup`. For dirty main, run:
 
 ```bash
 scripts/diagnose-dirty-main.sh
