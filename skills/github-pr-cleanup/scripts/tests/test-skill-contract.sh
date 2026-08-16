@@ -49,28 +49,10 @@ if [ -f "$SKILL_DIR/SKILL.md" ]; then
   else
     fail "manual documentation exposes a one-argument invocation"
   fi
-fi
-
-# `/github-pr-cleanup` is the manual skill boundary; cleanup.sh's two-argument
-# interface remains available to Worktree Warden. Model the documented manual
-# argument gate independently so its arity cannot be conflated with the script.
-manual_argument_gate() {
-  [ "$#" -eq 1 ] && [[ "$1" =~ ^[0-9]+$ ]]
-}
-if manual_argument_gate; then
-  fail "manual skill rejects zero arguments"
-else
-  ok "manual skill rejects zero arguments"
-fi
-if manual_argument_gate 101 47; then
-  fail "manual skill rejects two arguments"
-else
-  ok "manual skill rejects two arguments"
-fi
-if manual_argument_gate 101; then
-  ok "manual skill accepts exactly one numeric PR argument"
-else
-  fail "manual skill accepts exactly one numeric PR argument"
+  assert_eq "SKILL.md has one manual-entry start marker" 1 \
+    "$(grep -c '^<!-- github-pr-cleanup-manual-entry:start -->$' "$SKILL_DIR/SKILL.md")"
+  assert_eq "SKILL.md has one manual-entry end marker" 1 \
+    "$(grep -c '^<!-- github-pr-cleanup-manual-entry:end -->$' "$SKILL_DIR/SKILL.md")"
 fi
 
 new_fixture() {
@@ -79,22 +61,25 @@ new_fixture() {
   mkdir -p "$BASE/skill/scripts/tests" "$BASE/bin"
   cp -R "$SKILL_DIR/." "$BASE/skill/"
 
-  # Preserve the real one-argument dispatcher, but replace the heavy
-  # two-argument cleanup body at its process boundary. This records recursive
-  # calls and lets us prove stdout/status propagation without touching Git.
-  {
-    IFS= read -r first
-    printf '%s\n' "$first"
-    cat <<'HOOK'
-if [ "$#" -eq 2 ]; then
+  # Execute the SKILL-level manual workflow, while replacing cleanup.sh only
+  # at its real two-argument Worktree Warden boundary.
+  awk '
+    /^<!-- github-pr-cleanup-manual-entry:start -->$/ { in_block=1; next }
+    /^<!-- github-pr-cleanup-manual-entry:end -->$/ { exit }
+    in_block && /^```(bash)?$/ { next }
+    in_block { print }
+  ' "$SKILL_DIR/SKILL.md" > "$BASE/skill/manual-entry.sh"
+  chmod +x "$BASE/skill/manual-entry.sh"
+  cat > "$BASE/skill/scripts/cleanup.sh" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$#" -ne 2 ]; then
+  echo "cleanup stub requires exactly two arguments" >&2
+  exit 90
+fi
   printf '%s\t%s\n' "$1" "$2" >> "$CLEANUP_CALL_LOG"
   printf '%s\n' "$CLEANUP_STUB_OUTPUT"
   exit "$CLEANUP_STUB_STATUS"
-fi
-HOOK
-    cat
-  } < "$ENTRY" > "$BASE/skill/scripts/cleanup.sh.tmp"
-  mv "$BASE/skill/scripts/cleanup.sh.tmp" "$BASE/skill/scripts/cleanup.sh"
+SHIM
   chmod +x "$BASE/skill/scripts/cleanup.sh"
 
   cat > "$BASE/bin/gh" <<'SHIM'
@@ -123,17 +108,29 @@ SHIM
 }
 
 run_manual() {
-  local pr="$1"
   set +e
-  RUN_OUTPUT="$(PATH="$BASE/bin:$PATH" GH_CALL_LOG="$GH_CALL_LOG" GH_RESULT="$GH_RESULT" \
+  RUN_OUTPUT="$(cd "$BASE/skill" && PATH="$BASE/bin:$PATH" GH_CALL_LOG="$GH_CALL_LOG" GH_RESULT="$GH_RESULT" \
     GH_APP_TOKEN_HELPER="$BASE/token" CLEANUP_CALL_LOG="$CLEANUP_CALL_LOG" \
     CLEANUP_STUB_OUTPUT="$CLEANUP_STUB_OUTPUT" CLEANUP_STUB_STATUS="$CLEANUP_STUB_STATUS" \
-    "$BASE/skill/scripts/cleanup.sh" "$pr" 2>&1)"
+    bash "$BASE/skill/manual-entry.sh" "$@" 2>&1)"
   RUN_STATUS=$?
   set -e
 }
 
-if [ -f "$ENTRY" ]; then
+if [ -f "$ENTRY" ] && [ -f "$SKILL_DIR/SKILL.md" ] \
+  && [ "$(grep -c '^<!-- github-pr-cleanup-manual-entry:start -->$' "$SKILL_DIR/SKILL.md")" -eq 1 ] \
+  && [ "$(grep -c '^<!-- github-pr-cleanup-manual-entry:end -->$' "$SKILL_DIR/SKILL.md")" -eq 1 ]; then
+  for args in zero two; do
+    new_fixture
+    GH_RESULT=$'MERGED\t1\t47'
+    CLEANUP_STUB_OUTPUT=unexpected
+    CLEANUP_STUB_STATUS=0
+    if [ "$args" = zero ]; then run_manual; else run_manual 101 47; fi
+    [ "$RUN_STATUS" -ne 0 ] && ok "manual entry rejects $args arguments" || fail "manual entry rejects $args arguments"
+    assert_eq "rejected $args-argument entry does not query GitHub" 0 "$(wc -l < "$GH_CALL_LOG" | tr -d ' ')"
+    assert_eq "rejected $args-argument entry does not invoke cleanup" 0 "$(wc -l < "$CLEANUP_CALL_LOG" | tr -d ' ')"
+  done
+
   new_fixture
   GH_RESULT=$'MERGED\t1\t47'
   CLEANUP_STUB_OUTPUT='{"status":"retry","reason":"preserved"}'
