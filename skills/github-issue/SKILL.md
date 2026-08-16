@@ -129,7 +129,7 @@ EOF
 
 Both must be specific, not boilerplate. **Problem** states observable user-facing pain — what someone hits — without naming the fix or using implementation nouns. **Approach** states the behavior-level solution in minimal jargon and names deliberate non-goals; Phase 6 updates it if the implementation differs. The PR body is the asynchronous record of the design conversation. Then use `superpowers:writing-plans` to produce the plan.
 
-Write two artifacts inside `<worktree-path>` as **session-local working files** — the plan drives Phase 4, the design records the decisions. They must **not** land in the PR diff, so Git-exclude them before writing (Phase 7 deletes them with the worktree):
+Write two artifacts inside `<worktree-path>` as **session-local working files** — the plan drives Phase 4, the design records the decisions. They must **not** land in the PR diff, so Git-exclude them before writing; the cleanup workflow owns their eventual removal with the worktree:
 
 ```bash
 excl="$(git rev-parse --git-path info/exclude)"
@@ -146,8 +146,8 @@ plan_path="docs/superpowers/plans/<YYYY-MM-DD>-<slug>.md"
 - Design: `$design_path`
 - Plan: `$plan_path`
 
-After writing both files, record those two paths for Phase 7. Set `pr_number`
-to the PR selected in Phase 2:
+After writing both files, record those two paths for the cleanup workflow. Set
+`pr_number` to the PR selected in Phase 2:
 
 ```bash
 git_common_dir="$(git -C "$WORKSPACE" rev-parse --git-common-dir)"
@@ -235,50 +235,8 @@ If stale, `git rebase origin/main` (resolve conflicts, drop already-merged commi
 Do not merge unless the user explicitly requests it.
 Approval and merge remain explicit repository-owner actions.
 
----
-
-## Phase 7 — Post-Merge Cleanup
-
-Run this phase once the PR is terminal — the user reports it merged or closed, or authenticated GitHub state reports `MERGED` or `CLOSED`. A merged PR and a closed, unmerged one are both cleaned up, but they are never treated as the same outcome: only a merge resolves the issue and advances the trunk.
-
-`scripts/cleanup-merged.sh` is the canonical Phase 7 cleanup for a manual run and for any unattended caller. Run it directly:
-
-```bash
-scripts/cleanup-merged.sh <pr-number> <issue-number>
-```
-
-The PR's state selects one of two dispositions; an `OPEN` PR is `waiting` and any other state is `blocked` / `pr-state-unknown` rather than guessed at:
-
-| PR state | disposition | what it does |
-| --- | --- | --- |
-| `MERGED` | merged | removes the owned artifacts, worktree, local branch and exact remote branch; fast-forwards local `main`; closes the linked issue if GitHub did not |
-| `CLOSED` | closed-unmerged | removes exactly the same owned state — and nothing else: local `main` is never moved, and the linked issue is read to verify it but never closed |
-
-Both run the same guards: the branch must be under `agent/*` and unprotected, and its worktree clean. A merged PR must additionally be proven to have landed in `origin/main` — as a true merge commit, or via `git patch-id` equivalence for a squash merge; rebase merges stop and ask, since the PR's merge commit is only the last replayed commit and can never patch-match the whole feature. A closed, unmerged PR requires no such proof and asserts none (`merge_mode` is `null`, and the `cleaned` reason is `closed-unmerged-cleanup-complete`): the change is being discarded on purpose, which is exactly why nothing about it may reach `main` or the issue.
-
-Either way it deletes only the two manifest-recorded session artifacts after confirming they are ignored and untracked; matching tracked documents are preserved, and an unrecorded matching file stops cleanup with an actionable report.
-
-Every knowable guard is evaluated before the first mutation, and each step is journaled at `$(git rev-parse --git-common-dir)/github-issue/cleanup/pr-<pr-number>.state` — the intent (`attempted=`) before the mutation, the completion (`done=`) after it — so a crash in between still converges on the next run. A missing worktree, local branch, or recorded artifact is accepted **only** when that journal proves this workflow removed it; otherwise cleanup stops and asks. The journal also records the `disposition=`, so a run resumed against a PR whose outcome has since changed is `blocked` / `journal-mismatch` instead of finishing under the wrong rules.
-
-The merge proof covers one commit, so nothing is deleted without re-verifying the tip: the local branch must still equal the proven SHA (else `branch-advanced`), origin's branch must too (else `remote-branch-advanced`), and since the earlier read goes stale during removal, the deletion itself carries that expected tip as a lease, so origin rejects it if the ref moved (also `remote-branch-advanced`). Work pushed or committed after the proof is preserved, never deleted.
-
-Every run writes exactly one JSON record to stdout and keeps human diagnostics on stderr, so an unattended caller never parses free-form text:
-
-```json
-{"status":"cleaned","pr":"40","issue":"28","branch":"agent/28-restart-safe-cleanup","merge_mode":"regular","reason":"cleanup-complete"}
-```
-
-| `status` | exit | meaning |
-| --- | --- | --- |
-| `cleaned` | 0 | this run performed at least one cleanup step |
-| `already-clean` | 0 | nothing was pending; this run mutated nothing |
-| `waiting` | 10 | a normal precondition has not happened yet (PR still open) — no alert |
-| `blocked` | 20 | dirty, diverged, ambiguous, or unprovable state needing a human |
-| `retry` | 30 | authentication, GitHub, fetch, or another operational failure that may recover |
-
-`merge_mode` is `regular`, `squash`, or `null` — not yet proven, or a closed, unmerged PR that has no merge to prove; `reason` is a stable token (e.g. `pr-open`, `pr-state-unknown`, `merge-unprovable`, `worktree-dirty`, `closed-unmerged-cleanup-complete`), never prose. Read the stderr diagnostic for the details behind a `blocked` or `retry`.
-
-Never use forced worktree removal, reset, clean, or a force-push of content. The only permitted force flag is `--force-with-lease=refs/heads/<branch>:<proven-sha>` on the remote branch deletion, where it constrains the delete to the proven tip instead of loosening it — never a bare `--force`, never `--force-with-lease` without an expected SHA, never on anything but that deletion. `git branch -D` only via the two gated paths in `cleanup-merged.sh` — a proven squash (PR `MERGED` + `agent/*` + merge commit in `origin/main` + patch-id equivalence + clean worktree), or a discarded branch (PR `CLOSED` + `agent/*` + clean worktree + a remote tip still equal to the local tip) — never by hand. Never delete `main`, `master`, `develop`, `release/*`, or `hotfix/*` locally or remotely.
+In the devcontainer, Worktree Warden cleans the terminal PR automatically.
+Outside it, run `/github-pr-cleanup <pr-number>` after the PR is merged or closed.
 
 ---
 
@@ -290,5 +248,4 @@ Never use forced worktree removal, reset, clean, or a force-push of content. The
 - **More than one `Closes #<number>` in the PR body.** Exactly one closing reference.
 - **Generic `## Summary`.** Problem must reflect the issue; Approach must reflect the diff.
 - **Leaving the PR in draft past a green Phase 6, or calling `GH pr ready` directly.** Always hand off through `scripts/finish-handoff.sh`, so the handoff stays one explicit, testable step.
-- **Treating a closed PR as merged.** Both terminal states trigger Phase 7 cleanup, but only `MERGED` may fast-forward local `main` or close the linked issue — a closed, unmerged PR removes its own branch, worktree and artifacts and nothing else.
 - **Silently accepting or suppressing a baseline failure.** Unattended, one may be passed only when `scripts/baseline-triage.sh` returns `CONTINUE`, it is documented in the PR, and it is re-verified in Phase 5 — never ignored, excluded, weakened, converted to a pass, or marked ready on a regression.
