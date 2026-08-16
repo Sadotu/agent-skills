@@ -3,9 +3,9 @@
 #
 # Guards that the primary worktree is clean and on an unstale `main`, then
 # branches from freshly-fetched origin/main into an isolated worktree,
-# seeds a commit, pushes, and opens the draft PR. Any guard failure aborts
-# before any mutation — never commits issue work on a dirty or diverged
-# main.
+# seeds a commit, pushes, and opens the draft PR. Fetch may update remote
+# refs; guard failures abort before tracked primary-worktree or issue-work
+# mutation, so issue work is never committed on a dirty or diverged main.
 #
 # Usage: isolate.sh <issue-number> <slug> <worktree-path> <pr-title>
 set -euo pipefail
