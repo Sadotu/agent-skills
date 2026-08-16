@@ -7,11 +7,11 @@
 # before any mutation — never commits issue work on a dirty or diverged
 # main.
 #
-# Usage: isolate.sh <issue-number> <slug> <worktree-path> <pr-title> [base-ref]
+# Usage: isolate.sh <issue-number> <slug> <worktree-path> <pr-title>
 set -euo pipefail
 
-if [ "$#" -lt 4 ] || [ "$#" -gt 5 ]; then
-  echo "usage: isolate.sh <issue-number> <slug> <worktree-path> <pr-title> [base-ref]" >&2
+if [ "$#" -ne 4 ]; then
+  echo "usage: isolate.sh <issue-number> <slug> <worktree-path> <pr-title>" >&2
   exit 1
 fi
 
@@ -19,7 +19,6 @@ issue_number="$1"
 slug="$2"
 worktree_path="$3"
 pr_title="$4"
-base_ref="${5:-origin/main}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/lib/gh.sh"
@@ -34,8 +33,8 @@ git merge-base --is-ancestor main origin/main
 git merge --ff-only origin/main
 test "$(git rev-parse main)" = "$(git rev-parse origin/main)"
 
-# --- Isolate: branch from base_ref (default origin/main) into its own worktree ---
-git worktree add -b "$branch" "$worktree_path" "$base_ref"
+# --- Isolate: branch from origin/main into its own worktree ---
+git worktree add -b "$branch" "$worktree_path" origin/main
 
 # --- Open the PR now, as a draft: seed a commit, push, open immediately ---
 cd "$worktree_path"

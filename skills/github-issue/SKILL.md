@@ -53,50 +53,27 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 
 **CRITICAL — synchronize before writing or committing issue work.** `git fetch` updates `origin/main`, not local `main`. Committing in the primary worktree before isolation pollutes local `main` and makes it diverge.
 
-`scripts/isolate.sh` syncs the primary worktree with `origin/main`, isolates issue work into its own worktree and branch, and opens the draft PR — all before any issue commit. On any guard failure it exits nonzero without mutating the primary worktree, so issue work is never committed onto a dirty or diverged `main`: report the exact condition and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. From here on, run every write, commit, test, and Git command in `<worktree-path>` unless it explicitly inspects the primary worktree. Pass an optional 5th `base-ref` arg (e.g. `origin/agent/82-other-issue`) when this issue's work must stack on another in-flight branch instead of `origin/main`.
+`scripts/isolate.sh` first checks that the primary worktree is on `main`, clean, and not diverged, before any mutation. It then fetches, may fast-forward clean local `main`, branches from `origin/main`, creates the worktree, and opens the draft PR. On a guard failure, report the exact condition and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there.
 
 ```bash
 scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
 ```
 
-Report the PR URL to the user now — it is the first thing they see, before any design question is generated. The PR stays **draft** until Phase 6 finalizes it, then it is marked ready for the repository owner on both manual and managed runs.
+Report the PR URL before generating design questions. It stays draft until Phase 6.
 
 ### Dirty-tree triage (read-only, when the guard trips)
 
-If `scripts/isolate.sh` exits nonzero, check `git branch --show-current` and `git status --porcelain` in the primary worktree: on `main` with nonempty porcelain, the dirty-tree guard is what tripped — the wrong-branch guard runs before it, the diverged-`main` guards after. When it's the dirty-tree guard:
+If isolation fails, inspect the reported guard. For a dirty primary `main`, run:
 
 ```bash
 scripts/diagnose-dirty-main.sh
 ```
 
-This is read-only — it never stashes, resets, or cleans. It breaks the tree into staged changes, unstaged changes to tracked files, genuinely untracked paths, and already-ignored paths, and reports per untracked entry whether `.gitignore` should already have covered it. Report that breakdown to the user and ask for direction — pre-existing state on primary `main` is not this issue's to resolve, so never stash, reset, or clean it away to get past the guard.
+This read-only script separates staged, unstaged, untracked, and ignored state. Report its result and ask; never alter pre-existing primary-worktree state.
 
 ### Baseline-failure triage (unattended override)
 
-`superpowers:using-git-worktrees` says to report and ask when the post-isolation baseline fails. **For unattended `github-issue` runs only**, this narrow evidence-based procedure overrides that gate; the upstream skill is unchanged, and interactive users keep its default. No failure is ever silently ignored, suppressed, excluded, weakened, or dropped from final verification.
-
-When the isolated worktree's baseline verification fails, classify **each** failing test independently:
-
-1. Capture the exact baseline command, the failing test(s), exit status, and relevant (bounded) output from the issue worktree.
-2. Reproduce the same command on a separate, untouched checkout pinned to the branch-base `origin/main` commit (`git merge-base origin/main HEAD`) — never a checkout carrying issue-branch changes or generated state.
-3. Identify the files implicated by the failure: the failing test plus the production/configuration files named by its stack trace, assertion, coverage, or focused investigation.
-4. Compare those files and the failure's behavior against the issue's planned **and** actual change surface (expected tests, production files, configuration, dependencies, shared infrastructure).
-5. Run the classifier once per failure with the gathered evidence:
-
-   ```bash
-   scripts/baseline-triage.sh \
-     --reproduces-on-main <yes|no> \  # step 2 reproduced it on untouched origin/main
-     --overlaps-surface   <yes|no> \  # step 4 found overlap with the change surface
-     --branch-worsened    <yes|no> \  # new, worse, or materially different on the branch
-     --branch-resolved    <yes|no> \  # branch makes it pass/changes it with no reviewed in-scope cause
-     --ambiguous          <yes|no>    # flaky/timeout/environmental/global-setup/unclassifiable
-   ```
-
-   It prints `CONTINUE` (exit 0) only when the failure provably reproduces on untouched `origin/main` and is unrelated on every axis; otherwise `STOP: <reason>` (exit 2). It is fail-closed — missing or unclear evidence stops. Continue **only if every** failure returns `CONTINUE`; one `STOP` stops the run, and you report each classification and ask for direction.
-
-6. For every accepted (`CONTINUE`) failure, add an `Accepted baseline failure` section to the draft PR recording: the command, the exact test, bounded relevant output, the `origin/main` SHA and the issue-branch SHA, the implicated files, the change-surface comparison, and the classifier verdict with rationale. Redact secrets without hiding diagnostic facts; link an artifact if the output is too large.
-
-The classifier only reads evidence — it never runs, excludes, or alters a test, and you still supply every judgment. It enforces only the go/no-go combination, so an unattended run cannot rationalize past it.
+When the isolated baseline fails during an unattended run, follow the [baseline-failure triage procedure](references/baseline-failure-triage.md). It overrides only the upstream pause gate and fails closed: continue only when every failure is proven pre-existing and unrelated; otherwise stop and ask. Interactive runs always stop and ask.
 
 ---
 
@@ -127,7 +104,9 @@ EOF
 )"
 ```
 
-Both must be specific, not boilerplate. **Problem** states observable user-facing pain — what someone hits — without naming the fix or using implementation nouns. **Approach** states the behavior-level solution in minimal jargon and names deliberate non-goals; Phase 6 updates it if the implementation differs. The PR body is the asynchronous record of the design conversation. Then use `superpowers:writing-plans` to produce the plan.
+Write both in plain language for a reviewer who has not read the issue or code. Keep them short and explain unavoidable technical terms. **Problem** describes what goes wrong and its impact without proposing a fix. **Approach** describes the smallest behavior-level solution and deliberate non-goals without implementation detail.
+
+The PR body is the asynchronous design record. Then use `superpowers:writing-plans`.
 
 Write two artifacts inside `<worktree-path>` as **session-local working files** — the plan drives Phase 4, the design records the decisions. They must **not** land in the PR diff, so Git-exclude them before writing; the cleanup workflow owns their eventual removal with the worktree:
 
@@ -202,7 +181,7 @@ GH issue view <number>
 
 Do not claim completion from prior output, expected behavior, or a passing subset that does not cover the requested outcome.
 
-**Re-check every accepted baseline failure.** For each one recorded in the PR, re-run its command and re-invoke `scripts/baseline-triage.sh`, setting `--branch-worsened yes` if the output, failing assertions, or exit/timing behavior changed from the recorded baseline. If any now regresses, or the implementation expanded the change surface so `--overlaps-surface` is now `yes`, stop, do **not** mark the PR ready, and report. Otherwise preserve the confirmed-unchanged evidence in the PR verification summary. Never convert, suppress, or exclude a failure to finish.
+Re-check every baseline failure recorded under the Phase 2 procedure. Any regression or overlap with the final change surface blocks readiness; otherwise preserve the confirmed-unchanged evidence in the PR verification summary.
 
 **Before finalizing, ensure the full diff is the simplest solution that satisfies the issue.**
 
@@ -242,10 +221,7 @@ Outside it, run `/github-pr-cleanup <pr-number>` after the PR is merged or close
 
 ## Red Flags — STOP
 
-- **Branching from local `main` or a feature branch.** Always branch from freshly-fetched `origin/main`; if local `main` diverged or the primary worktree is dirty, stop without mutating it.
-- **`git stash -f`, `git reset --hard`, or `git clean -f` on primary `main` to force past the dirty-tree guard.** Run `scripts/diagnose-dirty-main.sh`, report the breakdown, and ask — pre-existing main state isn't this issue's job to resolve.
-- **Writing or committing issue artifacts in the primary worktree.** After isolation, every write and commit happens in `<worktree-path>`.
+- **Bypassing an isolation guard.** Do not stash, reset, clean, or otherwise alter pre-existing primary-worktree state.
+- **Writing issue work in the primary worktree.** Every issue write and commit belongs in `<worktree-path>`.
 - **More than one `Closes #<number>` in the PR body.** Exactly one closing reference.
-- **Generic `## Summary`.** Problem must reflect the issue; Approach must reflect the diff.
 - **Leaving the PR in draft past a green Phase 6, or calling `GH pr ready` directly.** Always hand off through `scripts/finish-handoff.sh`, so the handoff stays one explicit, testable step.
-- **Silently accepting or suppressing a baseline failure.** Unattended, one may be passed only when `scripts/baseline-triage.sh` returns `CONTINUE`, it is documented in the PR, and it is re-verified in Phase 5 — never ignored, excluded, weakened, converted to a pass, or marked ready on a regression.
