@@ -163,35 +163,30 @@ The plan must record the issue number and URL, the original acceptance criteria,
 
 ## Phase 4 — Implement
 
+### Implementation constraints
+
+- Implement only the behavior explicitly described in this issue.
+- Do not add speculative retries, backoff, compatibility layers, additional
+  commands, abstractions, extension points, or temporary alternatives.
+- If a dependency is unavailable, stop and report the dependency.
+- Every new production module and persistent state field must map to a named
+  acceptance criterion.
+- If the implementation needs more than five production files or introduces
+  a new state machine, pause and present the simpler alternative first.
+- Verify changed behavior through observable behavior at the smallest practical
+  boundary. Source text, generated arguments, or mock calls alone are not proof
+  of runtime behavior.
+- Exercise at least one realistic failure where relevant. Process wrappers must
+  preserve the underlying exit status; other integrations must verify the
+  relevant error or response semantics.
+- Do not add test infrastructure solely for this verification. If the relevant
+  boundary is unavailable, report the gap instead of claiming it was verified.
+
 **REQUIRED SUB-SKILL:** Use `superpowers:subagent-driven-development`.
 
 Execute the plan task by task with fresh subagents and the skill's review stages when subagent tools are available (discover deferred tools with `tool_search` if needed). If they are unavailable, say so and execute directly, preserving the same task boundaries, test-first discipline, and review checkpoints — never silently omit review.
 
 Follow `superpowers:test-driven-development` for every behavior change unless the user explicitly approves an exception.
-
-**Reject task diffs that are more complex than required; send them back for simplification.**
-
-## Simplicity constraints
-
-- Implement only the behavior explicitly described in this issue.
-- Do not add retries, backoff, compatibility layers, additional commands,
-  speculative abstractions, or extension points unless explicitly required.
-- If a dependency is not ready, stop and report the dependency; do not create
-  a temporary alternative.
-- Every new production module and persistent state field must map to a named
-  acceptance criterion.
-- If the implementation needs more than five production files or introduces
-  a new state machine, pause and present the simpler alternative first.
-
-## Behavioral verification constraints
-
-- Verify acceptance criteria through observable behavior at the smallest
-  practical boundary. Source text, generated arguments, or mock calls alone
-  are not proof of runtime behavior.
-- For wrappers and integrations, test at least one realistic failure beyond
-  the success check and preserve the underlying exit status.
-- Do not add test infrastructure solely for this verification. If the relevant
-  boundary is unavailable, report the gap instead of claiming it was verified.
 
 ---
 
