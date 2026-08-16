@@ -127,6 +127,10 @@ fi
 pr_number="$1"
 issue_number="$2"
 
+if [[ ! "$pr_number" =~ ^[0-9]+$ || ! "$issue_number" =~ ^[0-9]+$ ]]; then
+  finish blocked usage "usage: cleanup.sh <pr-number> <issue-number>"
+fi
+
 command -v jq >/dev/null 2>&1 || finish blocked jq-missing "jq is required but not installed"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
