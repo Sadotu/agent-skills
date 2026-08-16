@@ -53,7 +53,7 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 
 **CRITICAL — synchronize before writing or committing issue work.** `git fetch` updates `origin/main`, not local `main`. Committing in the primary worktree before isolation pollutes local `main` and makes it diverge.
 
-`scripts/isolate.sh` checks the current branch and cleanliness before touching tracked primary-worktree content or creating issue work. It then fetches (updating remote refs), rejects a diverged `main`, may fast-forward a clean local `main`, branches from `origin/main`, creates the worktree, and opens the draft PR. These guards preserve user work and prevent issue-work mutation on an unsafe base; they do not make synchronization read-only. On failure, diagnose the condition below and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there unless it explicitly inspects the primary worktree.
+`scripts/isolate.sh` checks the current branch and cleanliness, fetches (updating remote refs), rejects an unsafe base, and may fast-forward a clean local `main`. Only the wrong-branch, dirty-tree, and unsafe-base checks complete before the fast-forward; a later failure may leave local `main` synchronized. The script then branches from `origin/main`, creates the worktree, and opens the draft PR. On failure, diagnose the condition below and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there unless it explicitly inspects the primary worktree.
 
 ```bash
 scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
@@ -63,7 +63,7 @@ Report the PR URL before generating design questions. It stays draft until Phase
 
 ### Isolation-guard diagnosis (read-only)
 
-If isolation fails, inspect the primary worktree with `git branch --show-current` and `git status --porcelain`. The first guards run in this order: a branch other than `main` means wrong branch; `main` with nonempty porcelain means dirty main. After both pass and fetch succeeds, only a failing `git merge-base --is-ancestor main origin/main` establishes that `main` diverged. For any helper, fetch, worktree, commit, push, or PR failure, report that actual command and condition instead; App-auth failures require `/setup`. For dirty main, run:
+If isolation fails, inspect the primary worktree with `git branch --show-current` and `git status --porcelain`. The first guards run in this order: a branch other than `main` means wrong branch; `main` with nonempty porcelain means dirty main. After both pass and fetch succeeds, exit 1 from `git merge-base --is-ancestor main origin/main` establishes an unsafe base before the fast-forward. Any other nonzero exit, including an error from that command or a later merge, equality, worktree, commit, push, or PR command, must be reported as the actual command failure; local `main` may already have been fast-forwarded. App-auth failures require `/setup`. For dirty main, run:
 
 ```bash
 scripts/diagnose-dirty-main.sh

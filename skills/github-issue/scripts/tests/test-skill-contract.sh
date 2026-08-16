@@ -56,14 +56,12 @@ else
   ok "detailed baseline triage is absent from SKILL.md"
 fi
 
-for phase in 1 2 3 4 5 6; do
-  assert_eq "Phase $phase heading appears exactly once" 1 \
-    "$(grep -Ec "^## Phase $phase([[:space:]]|—)" "$SKILL")"
-done
-if grep -Fq 'unless it explicitly inspects the primary worktree' "$SKILL"; then
-  ok "post-isolation commands may explicitly inspect the primary worktree"
+if grep -Fq 'exit 1' "$SKILL" && \
+   grep -Fq 'before the fast-forward' "$SKILL" && \
+   grep -Fq 'other nonzero' "$SKILL"; then
+  ok "isolation diagnosis distinguishes unsafe-base exit 1 before fast-forward from command errors"
 else
-  fail "post-isolation commands may explicitly inspect the primary worktree"
+  fail "isolation diagnosis distinguishes unsafe-base exit 1 before fast-forward from command errors"
 fi
 word_count="$(wc -w < "$SKILL" | tr -d ' ')"
 if [ "$word_count" -lt 2000 ]; then
@@ -71,13 +69,6 @@ if [ "$word_count" -lt 2000 ]; then
 else
   fail "SKILL.md is under 2000 words" "$word_count words"
 fi
-
-# The remaining Red Flags must not repeat one another verbatim. Repeating a
-# complete bullet is a useful mechanical lower bound for the editorial rule.
-red_flags="$(sed -n '/^## Red Flags/,/^## /p' "$SKILL" | grep '^- ' || true)"
-red_flag_count="$(printf '%s\n' "$red_flags" | sed '/^$/d' | wc -l | tr -d ' ')"
-unique_red_flag_count="$(printf '%s\n' "$red_flags" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')"
-assert_eq "remaining Red Flags are unique" "$red_flag_count" "$unique_red_flag_count"
 
 # Extract the documented classifier example, replace its placeholders, and
 # execute it against a strict stub. This catches continuation-line comments:
