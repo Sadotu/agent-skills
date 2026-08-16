@@ -79,13 +79,15 @@ When the isolated baseline fails during an unattended run, follow the [baseline-
 
 ## Phase 3 — Design and Plan (inside issue worktree)
 
-**REQUIRED SUB-SKILL:** Use `superpowers:brainstorming`, seeded with the issue description and your codebase findings, for its structure only (explore context → clarifying questions → propose approaches → present design → write spec → self-review).
+**REQUIRED SUB-SKILL (unless the small-change gate below selects the compact path):** Use `superpowers:brainstorming`, seeded with the issue description and your codebase findings, for its structure only (explore context → clarifying questions → propose approaches → present design → write spec → self-review).
 
 **Override for this workflow — do not pause at any of brainstorming's gates.** That skill normally stops and waits for the user at each step: clarifying questions, the approach choice, per-section design approval, the spec review gate. Here none of that waits. For every question you would have asked, generate it as usual, answer it yourself (pick the recommended or best option), and continue immediately. Record each one as you go: the question, the options considered, the answer chosen, and why.
 
 **Prefer the simplest design that satisfies the issue; avoid speculative requirements.**
 
-Before implementation, record the expected files and approximate production-code size in the plan. Every added production behavior must map to an acceptance criterion or demonstrated regression; if the change grows beyond roughly twice the estimate, redesign around the simplest viable solution, and require explicit user approval for speculative hardening.
+**Small-change gate — settle this before proposing any approach.** First record the inline baseline: the smallest edit to the existing code path, covered at an existing test boundary, with its changed-file and changed-line count. Then answer three questions. Can every acceptance criterion be met by editing that existing code path? Can regression coverage go in an existing test boundary? Does a proposed new module solve a concrete technical impossibility, rather than only making testing or organization easier? On yes, yes, and no, constrain the work to that code path and test boundary and take the **compact path**: skip brainstorming, the design doc, the plan file, and the artifact manifest below, and record scope, expected diff, focused test, and verification in the PR body instead.
+
+Otherwise record the expected files and approximate size in the plan. Size and file budgets count every changed line and file — production, tests, documentation, configuration, and Docker/build wiring. Every added behavior must map to an acceptance criterion or demonstrated regression; if the change grows beyond roughly twice the inline baseline, redesign around the simplest viable solution, and require explicit user approval for speculative hardening.
 
 Once the design doc and plan are written, replace the PR body placeholders. `## Summary` should tell reviewers what the PR solves and how, before the design log and diff:
 
@@ -149,9 +151,10 @@ The plan must record the issue number and URL, the original acceptance criteria,
   commands, abstractions, extension points, or temporary alternatives.
 - If a dependency is unavailable, stop and report the dependency.
 - Every new production module and persistent state field must map to a named
-  acceptance criterion.
-- If the implementation needs more than five production files or introduces
-  a new state machine, pause and present the simpler alternative first.
+  acceptance criterion. A module with only one caller must also name the
+  acceptance criterion the inline baseline cannot meet.
+- If the change reaches five changed files of any kind, or introduces a new
+  state machine, pause and present the simpler alternative first.
 - Verify changed behavior through observable behavior at the smallest practical
   boundary. Source text, generated arguments, or mock calls alone are not proof
   of runtime behavior.
@@ -183,9 +186,9 @@ Do not claim completion from prior output, expected behavior, or a passing subse
 
 Re-check every baseline failure recorded under the Phase 2 procedure. Any regression or overlap with the final change surface blocks readiness; otherwise preserve the confirmed-unchanged evidence in the PR verification summary.
 
-**Before finalizing, ensure the full diff is the simplest solution that satisfies the issue.**
+**Before finalizing, compare the full diff against the inline baseline recorded in Phase 3** — that concrete alternative, not your own estimate. Justify every file and behavior beyond it against a named acceptance criterion, or simplify.
 
-Report production, test, and documentation line counts separately.
+Report changed line counts separately by kind: production, test, documentation, configuration, and Docker/build wiring.
 
 ---
 
