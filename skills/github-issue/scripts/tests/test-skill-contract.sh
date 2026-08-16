@@ -63,6 +63,60 @@ if grep -Fq 'exit 1' "$SKILL" && \
 else
   fail "isolation diagnosis distinguishes unsafe-base exit 1 before fast-forward from command errors"
 fi
+# Regression fixture (issue #51), modeled on Sadotu/agent-devcontainer#65: the
+# request was to skip one existing warning unless a workspace opts in, and the
+# workflow still produced a new one-caller library plus build wiring across
+# exactly five production files, with tests excluded from the size estimate.
+# Each assertion below is a rule that would have kept that change inline.
+gate_section="$(awk '
+  /^## Phase 3 / { section=1 }
+  section && /^## Phase 4 / { exit }
+  section { print }
+' "$SKILL")"
+if printf '%s\n' "$gate_section" | grep -Fq 'inline baseline' && \
+   printf '%s\n' "$gate_section" | grep -Eq 'before (proposing|you propose)'; then
+  ok "#65 fixture: inline baseline is recorded before architecture selection"
+else
+  fail "#65 fixture: inline baseline is recorded before architecture selection"
+fi
+if printf '%s\n' "$gate_section" | grep -Eq 'existing code path' && \
+   printf '%s\n' "$gate_section" | grep -Eq 'existing test'; then
+  ok "#65 fixture: gate asks whether the existing code path and test boundary suffice"
+else
+  fail "#65 fixture: gate asks whether the existing code path and test boundary suffice"
+fi
+if grep -Eq 'documentation, configuration, and (Docker/)?build wiring' "$SKILL"; then
+  ok "#65 fixture: budgets count tests, docs, configuration, and build wiring"
+else
+  fail "#65 fixture: budgets count tests, docs, configuration, and build wiring"
+fi
+if grep -Eq 'reaches five changed files' "$SKILL" && ! grep -Fq 'more than five production files' "$SKILL"; then
+  ok "#65 fixture: file threshold is inclusive and not production-only"
+else
+  fail "#65 fixture: file threshold is inclusive and not production-only"
+fi
+if grep -Eq 'one caller' "$SKILL" && grep -Fq 'cannot meet' "$SKILL"; then
+  ok "#65 fixture: a one-caller module must cite the criterion the inline baseline cannot meet"
+else
+  fail "#65 fixture: a one-caller module must cite the criterion the inline baseline cannot meet"
+fi
+if printf '%s\n' "$gate_section" | grep -Fq 'compact path'; then
+  ok "#65 fixture: qualifying small changes take a compact path"
+else
+  fail "#65 fixture: qualifying small changes take a compact path"
+fi
+verify_section="$(awk '
+  /^## Phase 5 / { section=1 }
+  section && /^## Phase 6 / { exit }
+  section { print }
+' "$SKILL")"
+if printf '%s\n' "$verify_section" | grep -Fq 'inline baseline' && \
+   printf '%s\n' "$verify_section" | grep -Fq 'not your own estimate'; then
+  ok "#65 fixture: final review compares the diff against the recorded inline baseline"
+else
+  fail "#65 fixture: final review compares the diff against the recorded inline baseline"
+fi
+
 word_count="$(wc -w < "$SKILL" | tr -d ' ')"
 if [ "$word_count" -lt 2000 ]; then
   ok "SKILL.md is under 2000 words"
