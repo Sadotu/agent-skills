@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Tests for scripts/cleanup-merged.sh (Phase 7: "Post-Merge Cleanup").
+# Tests for scripts/cleanup.sh (deterministic PR cleanup).
 #
 # Self-contained: builds disposable temp git repos (a bare "origin", a
 # primary clone standing in for $WORKSPACE, and a linked worktree standing
-# in for the issue's worktree) per case, runs cleanup-merged.sh against
+# in for the issue's worktree) per case, runs cleanup.sh against
 # them with a stubbed `gh`, and asserts exit code / stderr / resulting
 # repo state. No test framework, no network calls.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLEANUP="$SCRIPT_DIR/../cleanup-merged.sh"
+CLEANUP="$SCRIPT_DIR/../cleanup.sh"
 REAL_GIT="$(command -v git)"
 SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 
@@ -192,12 +192,14 @@ new_fixture() {
   GH_LOG="$BASE/gh.log"
   GIT_NETWORK_LOG="$BASE/git-network.log"
   GIT_CMD_LOG="$BASE/git-cmd.log"
+  APP_TOKEN_LOG="$BASE/app-token.log"
   APP_TOKEN_HELPER="$BASE/gh-app-token.sh"
   BRANCH="agent/${issue}-${slug}"
   WT="$BASE/wt"
   : > "$GH_LOG"
   : > "$GIT_NETWORK_LOG"
   : > "$GIT_CMD_LOG"
+  : > "$APP_TOKEN_LOG"
 
   git init -q --bare "$ORIGIN"
   git init -q "$CLONE"
@@ -272,6 +274,7 @@ SHIM
   chmod +x "$STUBBIN/git"
   cat > "$APP_TOKEN_HELPER" <<'SHIM'
 #!/usr/bin/env bash
+printf 'called\n' >> "$APP_TOKEN_LOG"
 printf '%s\n' "$SENTINEL_TOKEN"
 SHIM
   chmod +x "$APP_TOKEN_HELPER"
@@ -303,7 +306,7 @@ push_direct_commit_to_main() {
 }
 
 # run_cleanup <cwd> <pr-number> <issue-number>
-# Invokes cleanup-merged.sh with the given cwd, a stubbed `gh` ahead on
+# Invokes cleanup.sh with the given cwd, a stubbed `gh` ahead on
 # PATH, and a hermetic stub GitHub App token helper. Keeps stdout (the
 # machine-readable record) and stderr (human diagnostics) in separate
 # files, then replays both so existing `>out.log 2>&1` call sites still
@@ -317,6 +320,7 @@ run_cleanup() {
     GH_LOG="$GH_LOG" \
     GIT_NETWORK_LOG="$GIT_NETWORK_LOG" \
     GIT_CMD_LOG="$GIT_CMD_LOG" \
+    APP_TOKEN_LOG="$APP_TOKEN_LOG" \
     TEST_REMOTE_URL="$ORIGIN" \
     GH_APP_TOKEN_HELPER="$APP_TOKEN_HELPER" \
     SENTINEL_TOKEN="$SENTINEL" \
@@ -326,6 +330,32 @@ run_cleanup() {
   cat "$BASE/stdout.log"
   cat "$BASE/stderr.log" >&2
   return "$rc"
+}
+
+# --- Direct interface: reject malformed identifiers before setup or I/O ---
+assert_invalid_identifier_rejected() {
+  local desc="$1" pr="$2" issue="$3" rc
+  new_fixture 0 invalid-identifier
+
+  run_cleanup "$CLONE" "$pr" "$issue" >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "$desc: blocked usage exit code" 20 "$rc"
+  assert_single_record "$desc: exactly one JSON record on stdout"
+  assert_record "$desc: status is blocked" status blocked
+  assert_record "$desc: reason is usage" reason usage
+  assert_true "$desc: human usage diagnostic is on stderr" \
+    grep -Fq 'usage: cleanup.sh <pr-number> <issue-number>' "$BASE/stderr.log"
+  assert_false "$desc: App token helper is not invoked" test -s "$APP_TOKEN_LOG"
+  assert_false "$desc: GitHub CLI is not invoked" test -s "$GH_LOG"
+  assert_false "$desc: git setup or mutation is not invoked" test -s "$GIT_CMD_LOG"
+  assert_false "$desc: no cleanup state directory is created" \
+    test -e "$CLONE/.git/github-issue"
+}
+
+test_case0_invalid_identifiers() {
+  assert_invalid_identifier_rejected "case0a path-like PR" '../../escape' 1
+  assert_invalid_identifier_rejected "case0b nonnumeric issue" 1 issue-x
 }
 
 # land_branch_on_origin_only pushes $BRANCH's tip onto the fake origin's
@@ -1547,6 +1577,7 @@ test_case25_no_forbidden_git_in_source() {
   fi
 }
 
+test_case0_invalid_identifiers
 test_case1_not_merged
 test_case2_non_agent_branch
 test_case3_not_ancestor

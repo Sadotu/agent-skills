@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 7 ("Post-Merge Cleanup") for skills/github-issue/SKILL.md.
+# Deterministic cleanup implementation owned by skills/github-pr-cleanup.
 #
 # Cleans up a terminal agent/* PR, in one of two dispositions the PR's
 # GitHub state selects. An OPEN PR is never terminal and any other state is
@@ -47,7 +47,7 @@
 #   blocked         20   dirty/diverged/ambiguous/unprovable; needs a human
 #   retry           30   auth, GitHub, fetch or other operational failure
 #
-# Usage: cleanup-merged.sh <pr-number> <issue-number>
+# Usage: cleanup.sh <pr-number> <issue-number>
 set -euo pipefail
 
 pr_number=""
@@ -111,7 +111,7 @@ trap 'on_err "$LINENO"' ERR
 on_exit() {
   local rc=$?
   if [ "$RECORD_EMITTED" -eq 0 ]; then
-    printf 'cleanup-merged: unexpected failure at line %s (exit %s); rerun to converge\n' \
+    printf 'cleanup: unexpected failure at line %s (exit %s); rerun to converge\n' \
       "${ERR_LINE:-unknown}" "$rc" >&2
     emit_record retry unexpected-failure
     exit 30
@@ -121,17 +121,22 @@ on_exit() {
 trap on_exit EXIT
 
 if [ "$#" -ne 2 ]; then
-  finish blocked usage "usage: cleanup-merged.sh <pr-number> <issue-number>"
+  finish blocked usage "usage: cleanup.sh <pr-number> <issue-number>"
 fi
 
 pr_number="$1"
 issue_number="$2"
 
+if [[ ! "$pr_number" =~ ^[0-9]+$ || ! "$issue_number" =~ ^[0-9]+$ ]]; then
+  finish blocked usage "usage: cleanup.sh <pr-number> <issue-number>"
+fi
+
 command -v jq >/dev/null 2>&1 || finish blocked jq-missing "jq is required but not installed"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/gh.sh
-source "$script_dir/lib/gh.sh" \
+# Shared by the issue workflow scripts that still own this setup library.
+# shellcheck source=../../github-issue/scripts/lib/gh.sh
+source "$script_dir/../../github-issue/scripts/lib/gh.sh" \
   || finish blocked environment-unconfigured "unable to resolve the repository or App credentials"
 
 # --- Guard: resolve the merged branch from the PR, enforce agent/* ---

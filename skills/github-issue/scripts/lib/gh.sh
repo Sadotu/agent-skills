@@ -30,8 +30,8 @@ REPO="$owner/$repo"
 
 # Do NOT use `git rev-parse --show-toplevel` here: it returns whichever
 # worktree the caller's cwd happens to be in, which is wrong when
-# cleanup-merged.sh runs from inside the issue worktree it's about to
-# delete. `git worktree list --porcelain`'s first entry is always the
+# github-pr-cleanup's cleanup.sh runs from inside the issue worktree it's
+# about to delete. `git worktree list --porcelain`'s first entry is always the
 # primary worktree, regardless of the caller's cwd.
 WORKSPACE="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
 
