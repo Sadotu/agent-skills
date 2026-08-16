@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Tests for scripts/cleanup-merged.sh (Phase 7: "Post-Merge Cleanup").
+# Tests for scripts/cleanup.sh (deterministic PR cleanup).
 #
 # Self-contained: builds disposable temp git repos (a bare "origin", a
 # primary clone standing in for $WORKSPACE, and a linked worktree standing
-# in for the issue's worktree) per case, runs cleanup-merged.sh against
+# in for the issue's worktree) per case, runs cleanup.sh against
 # them with a stubbed `gh`, and asserts exit code / stderr / resulting
 # repo state. No test framework, no network calls.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLEANUP="$SCRIPT_DIR/../cleanup-merged.sh"
+CLEANUP="$SCRIPT_DIR/../cleanup.sh"
 REAL_GIT="$(command -v git)"
 SENTINEL='ghs_SENTINEL_APP_TOKEN_MUST_NOT_LEAK'
 
@@ -303,7 +303,7 @@ push_direct_commit_to_main() {
 }
 
 # run_cleanup <cwd> <pr-number> <issue-number>
-# Invokes cleanup-merged.sh with the given cwd, a stubbed `gh` ahead on
+# Invokes cleanup.sh with the given cwd, a stubbed `gh` ahead on
 # PATH, and a hermetic stub GitHub App token helper. Keeps stdout (the
 # machine-readable record) and stderr (human diagnostics) in separate
 # files, then replays both so existing `>out.log 2>&1` call sites still
