@@ -28,34 +28,9 @@ if [ ! -x "$skill_dir/scripts/cleanup.sh" ]; then
   echo "github-pr-cleanup is not installed in the current worktree" >&2
   exit 2
 fi
-origin="$(git remote get-url origin)" || exit $?
-case "$origin" in
-  https://github.com/*) repo="${origin#https://github.com/}" ;;
-  git@github.com:*) repo="${origin#git@github.com:}" ;;
-  ssh://git@github.com/*) repo="${origin#ssh://git@github.com/}" ;;
-  *) echo "invalid GitHub origin: expected owner/repo on github.com" >&2; exit 2 ;;
-esac
-repo="${repo%/}"
-repo="${repo%.git}"
-owner="${repo%%/*}"
-repository="${repo#*/}"
-if [ -z "$owner" ] || [ -z "$repository" ] || [ "$repository" = "$repo" ] || [[ "$repository" = */* ]]; then
-  echo "invalid GitHub origin: expected exactly owner/repo on github.com" >&2
-  exit 2
-fi
+source "$workspace/skills/github-issue/scripts/lib/gh.sh"
 
-token_helper="${GH_APP_TOKEN_HELPER:-/opt/agent-devcontainer/gh-app-token.sh}"
-if [ ! -x "$token_helper" ]; then
-  echo "GitHub App token helper is unavailable; run /setup" >&2
-  exit 2
-fi
-token="$(env -u GH_TOKEN -u GITHUB_TOKEN GITHUB_APP_REPO="$repo" "$token_helper")" || exit $?
-if [ -z "$token" ]; then
-  echo "GitHub App token helper returned an empty token; run /setup" >&2
-  exit 2
-fi
-
-pr_data="$(GH_TOKEN="$token" GITHUB_TOKEN= gh pr view "$pr_number" --repo "$repo" \
+pr_data="$(GH pr view "$pr_number" \
   --json state,closingIssuesReferences \
   --jq '[.state, (.closingIssuesReferences | length), (.closingIssuesReferences[0].number // "")] | @tsv')" || exit $?
 IFS=$'\t' read -r state issue_count issue_number extra <<< "$pr_data"

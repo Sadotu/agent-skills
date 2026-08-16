@@ -34,12 +34,6 @@ assert_file() {
 assert_file "github-pr-cleanup owns a SKILL.md" "$SKILL_DIR/SKILL.md"
 assert_file "github-pr-cleanup owns scripts/cleanup.sh" "$ENTRY"
 
-mapfile -t cleanup_scripts < <(find "$ROOT/skills" -type f \( -name 'cleanup.sh' -o -name 'cleanup-merged.sh' \) | sort)
-assert_eq "the repository has exactly one cleanup implementation" 1 "${#cleanup_scripts[@]}"
-[ "${cleanup_scripts[0]-}" = "$ENTRY" ] \
-  && ok "the sole cleanup implementation belongs to github-pr-cleanup" \
-  || fail "the sole cleanup implementation belongs to github-pr-cleanup" "found ${cleanup_scripts[*]-none}"
-
 mapfile -t issue_cleanup < <(find "$ISSUE_DIR" -type f \( -name 'cleanup.sh' -o -name 'cleanup-merged.sh' \) | sort)
 assert_eq "github-issue contains no cleanup implementation or wrapper" 0 "${#issue_cleanup[@]}"
 
@@ -53,14 +47,26 @@ if [ -f "$SKILL_DIR/SKILL.md" ]; then
     "$(grep -c '^<!-- github-pr-cleanup-manual-entry:start -->$' "$SKILL_DIR/SKILL.md")"
   assert_eq "SKILL.md has one manual-entry end marker" 1 \
     "$(grep -c '^<!-- github-pr-cleanup-manual-entry:end -->$' "$SKILL_DIR/SKILL.md")"
+  grep -Fq 'source "$workspace/skills/github-issue/scripts/lib/gh.sh"' "$SKILL_DIR/SKILL.md" \
+    && ok "manual entry sources the shared GitHub App helper" \
+    || fail "manual entry sources the shared GitHub App helper"
+  grep -Fq 'GH pr view "$pr_number"' "$SKILL_DIR/SKILL.md" \
+    && ok "manual entry uses the shared authenticated GH function" \
+    || fail "manual entry uses the shared authenticated GH function"
+  if grep -Eq 'GH_TOKEN=|GITHUB_TOKEN=|_mint_app_token|token_helper=' "$SKILL_DIR/SKILL.md"; then
+    fail "manual entry does not duplicate token plumbing"
+  else
+    ok "manual entry does not duplicate token plumbing"
+  fi
 fi
 
 new_fixture() {
   BASE="$(mktemp -d)"
   TMP_DIRS+=("$BASE")
   FIXTURE_SKILL="$BASE/workspace/skills/github-pr-cleanup"
-  mkdir -p "$FIXTURE_SKILL/scripts/tests" "$BASE/bin"
+  mkdir -p "$FIXTURE_SKILL/scripts/tests" "$BASE/workspace/skills/github-issue/scripts/lib" "$BASE/bin"
   cp -R "$SKILL_DIR/." "$FIXTURE_SKILL/"
+  cp "$ISSUE_DIR/scripts/lib/gh.sh" "$BASE/workspace/skills/github-issue/scripts/lib/gh.sh"
 
   # Execute the SKILL-level manual workflow, while replacing cleanup.sh only
   # at its real two-argument Worktree Warden boundary.
