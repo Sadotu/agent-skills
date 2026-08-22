@@ -15,9 +15,14 @@ assert_eq() {
   if [ "$expected" = "$actual" ]; then ok "$desc"; else fail "$desc" "expected [$expected], got [$actual]"; fi
 }
 
-replacement='Write both in plain language for a reviewer who has not read the issue or code. Keep them short and explain unavoidable technical terms. **Problem** describes what goes wrong and its impact without proposing a fix. **Approach** describes the smallest behavior-level solution and deliberate non-goals without implementation detail.'
+replacement='Write both in plain language for a reviewer who has not read the issue or code, and explain unavoidable technical terms. **Problem** describes what goes wrong and its impact without proposing a fix. **Approach** describes the smallest behavior-level solution and deliberate non-goals without implementation detail.'
 assert_eq "replacement Problem/Approach guidance appears exactly once" 1 \
   "$(grep -Fxc "$replacement" "$SKILL")"
+
+assert_eq "Problem/Approach one-sentence cap is documented" 1 \
+  "$(grep -Fc 'capped at one sentence' "$SKILL")"
+assert_eq "mechanical trailing-period check is documented" 1 \
+  "$(grep -Fc 'strip one trailing period from each bullet and confirm no period remains' "$SKILL")"
 
 if [ -f "$REFERENCE" ]; then
   ok "conditional baseline-failure reference exists"
