@@ -89,15 +89,15 @@ When the isolated baseline fails during an unattended run, follow the [baseline-
 
 Otherwise record the expected files and approximate size in the plan. Size and file budgets count every changed line and file — production, tests, documentation, configuration, and Docker/build wiring. Every added behavior must map to an acceptance criterion or demonstrated regression; if the change grows beyond roughly twice the inline baseline, redesign around the simplest viable solution, and require explicit user approval for speculative hardening.
 
-Once the design doc and plan are written, replace the PR body placeholders. `## Summary` should tell reviewers what the PR solves and how, before the design log and diff:
+Once the design doc and plan are written, replace the PR body placeholders. `## Summary` should tell reviewers what the PR solves and how, before the design log and diff. **Problem** and **Approach** are each capped at one sentence — before running `gh pr edit`, strip one trailing period from each bullet and confirm no period remains; if one does, the bullet is more than one sentence and must be tightened:
 
 ```bash
 GH pr edit <pr-number> --body "$(cat <<'EOF'
 Closes #<number>
 
 ## Summary
-- **Problem:** <what the issue requires>
-- **Approach:** <how this PR solves it>
+- **Problem:** <what the issue requires, one sentence>
+- **Approach:** <how this PR solves it, one sentence>
 
 ## Design Decisions
 - **Q:** <question> — **A:** <answer chosen> — **Why:** <reasoning>
@@ -106,7 +106,7 @@ EOF
 )"
 ```
 
-Write both in plain language for a reviewer who has not read the issue or code. Keep them short and explain unavoidable technical terms. **Problem** describes what goes wrong and its impact without proposing a fix. **Approach** describes the smallest behavior-level solution and deliberate non-goals without implementation detail.
+Write both in plain language for a reviewer who has not read the issue or code, and explain unavoidable technical terms. **Problem** describes what goes wrong and its impact without proposing a fix. **Approach** describes the smallest behavior-level solution and deliberate non-goals without implementation detail.
 
 The PR body is the asynchronous design record. Then use `superpowers:writing-plans`.
 
