@@ -117,6 +117,23 @@ else
   fail "#65 fixture: final review compares the diff against the recorded inline baseline"
 fi
 
+# Fixture (issue #54): the compact path must skip subagent-driven-development
+# entirely, while non-compact work keeps the existing subagent workflow.
+implement_section="$(awk '
+  /^## Phase 4 / { section=1 }
+  section && /^## Phase 5 / { exit }
+  section { print }
+' "$SKILL")"
+compact_skip_line='On the compact path, implement directly in this session — do not invoke `superpowers:subagent-driven-development` or dispatch implementation or review subagents.'
+assert_eq "#54 fixture: compact path skips subagent-driven-development" 1 \
+  "$(grep -Fxc "$compact_skip_line" "$SKILL")"
+if printf '%s\n' "$implement_section" | grep -Fq 'REQUIRED SUB-SKILL' && \
+   printf '%s\n' "$implement_section" | grep -Fq 'superpowers:subagent-driven-development'; then
+  ok "#54 fixture: non-compact path still requires subagent-driven-development"
+else
+  fail "#54 fixture: non-compact path still requires subagent-driven-development"
+fi
+
 word_count="$(wc -w < "$SKILL" | tr -d ' ')"
 if [ "$word_count" -lt 2000 ]; then
   ok "SKILL.md is under 2000 words"

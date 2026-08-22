@@ -164,9 +164,9 @@ The plan must record the issue number and URL, the original acceptance criteria,
 - Do not add test infrastructure solely for this verification. If the relevant
   boundary is unavailable, report the gap instead of claiming it was verified.
 
-**REQUIRED SUB-SKILL:** Use `superpowers:subagent-driven-development`.
+On the compact path, implement directly in this session — do not invoke `superpowers:subagent-driven-development` or dispatch implementation or review subagents.
 
-Execute the plan task by task with fresh subagents and the skill's review stages when subagent tools are available (discover deferred tools with `tool_search` if needed). If they are unavailable, say so and execute directly, preserving the same task boundaries, test-first discipline, and review checkpoints — never silently omit review.
+Otherwise, **REQUIRED SUB-SKILL:** Use `superpowers:subagent-driven-development`. Execute the plan task by task with fresh subagents and the skill's review stages when subagent tools are available (discover deferred tools with `tool_search` if needed). If they are unavailable, say so and execute directly, preserving the same task boundaries, test-first discipline, and review checkpoints — never silently omit review.
 
 Follow `superpowers:test-driven-development` for every behavior change unless the user explicitly approves an exception.
 
