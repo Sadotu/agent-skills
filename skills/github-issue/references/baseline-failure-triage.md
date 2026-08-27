@@ -26,7 +26,7 @@ scripts/baseline-triage.sh \
 
 The classifier prints `CONTINUE` with exit 0 only when the failure provably reproduces on untouched `origin/main` and is unrelated on every axis. Missing, unclear, overlapping, changed, or ambiguous evidence produces `STOP: <reason>` with exit 2. Continue only if every failure returns `CONTINUE`; otherwise stop, report every classification, and ask for direction.
 
-For every accepted failure, add an `Accepted baseline failure` section to the draft PR with the command, exact test, bounded output, `origin/main` and issue-branch SHAs, implicated files, change-surface comparison, verdict, and rationale. Redact secrets without hiding diagnostic facts; link an artifact for large output.
+For every accepted failure, add an `Accepted baseline failure` section to the issue PR with the command, exact test, bounded output, `origin/main` and issue-branch SHAs, implicated files, change-surface comparison, verdict, and rationale. Redact secrets without hiding diagnostic facts; link an artifact for large output.
 
 In Phase 5, rerun each recorded command and classifier. Set `--branch-worsened yes` for changed output, assertions, exit, or timing, and set `--overlaps-surface yes` if the final change surface overlaps. Any `STOP` blocks readiness. Otherwise preserve the confirmed-unchanged evidence in the PR verification summary.
 

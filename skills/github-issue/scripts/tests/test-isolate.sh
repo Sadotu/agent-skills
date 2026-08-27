@@ -251,6 +251,10 @@ test_case4_happy_path() {
     bash -c "[ -s '$GIT_TOKEN_SINK' ] && ! grep -qv '$SENTINEL' '$GIT_TOKEN_SINK'"
   assert_true "case4: PR title passed through" \
     bash -c "grep -q 'My PR Title' '$GH_LOG'"
+  assert_true "case4: PR is not created as draft" \
+    bash -c "! grep -q -- '--draft' '$GH_LOG'"
+  assert_true "case4: PR title is marked WIP" \
+    bash -c "grep -q -- '--title WIP: My PR Title' '$GH_LOG'"
 
   local expected_body
   expected_body=$'Closes #7\n\n## Summary\n_In progress — filled in once design work completes._\n\n## Design Decisions\n_In progress — filled in once design work completes._'
