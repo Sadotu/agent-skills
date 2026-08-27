@@ -9,7 +9,7 @@ Invoke as `/address-review <issue-number> <pr-number> <review-fingerprint>`.
 
 This skill repairs only blocking findings from a specific trusted `review-pr`
 snapshot. It operates on an existing PR and managed `agent/<issue>-*` worktree.
-It never creates a PR or worktree, changes labels or draft state, approves or
+It never creates a PR or worktree, changes PR title or label state, approves or
 merges, or launches another review.
 
 ## Guarded entry
@@ -80,5 +80,5 @@ not resolve symbolic `HEAD` again during publication. A push failure is
 terminal; report its output and do not attempt lifecycle actions.
 
 Finish by reporting the repaired findings, commit SHA, focused and full-suite
-verification evidence, and push result. Do not mark ready, approve, merge,
-change labels, create or close anything, or start another review pass.
+verification evidence, and push result. Do not change PR title or label state,
+approve, merge, create or close anything, or start another review pass.

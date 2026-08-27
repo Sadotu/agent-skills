@@ -68,6 +68,23 @@ if grep -Fq 'exit 1' "$SKILL" && \
 else
   fail "isolation diagnosis distinguishes unsafe-base exit 1 before fast-forward from command errors"
 fi
+
+assert_eq "issue PR creation documents the WIP title" 1 \
+  "$(grep -Fc 'opens with a `WIP: ` title' "$SKILL")"
+assert_eq "handoff documents the WIP-title removal and owner-review label" 1 \
+  "$(grep -Fc 'removes one leading `WIP: ` from the title and adds the `user-merge-review` label' "$SKILL")"
+assert_eq "review-pr forbids PR title or label changes" 3 \
+  "$(grep -Ec 'chang(e|es|ing) PR title or label state' "$ROOT/skills/review-pr/SKILL.md")"
+assert_eq "address-review forbids PR title or label changes" 1 \
+  "$(grep -Fc 'changes PR title or label state' "$ROOT/skills/address-review/SKILL.md")"
+assert_eq "address-review completion forbids PR title or label changes" 1 \
+  "$(grep -Fc 'Do not change PR title or label state' "$ROOT/skills/address-review/SKILL.md")"
+if grep -Eiq 'draft PR|PR.*draft|draft.*PR' "$SKILL" "$REFERENCE"; then
+  fail "github-issue instructions do not describe the issue PR as draft"
+else
+  ok "github-issue instructions do not describe the issue PR as draft"
+fi
+
 # Regression fixture (issue #51), modeled on Sadotu/agent-devcontainer#65: the
 # request was to skip one existing warning unless a workspace opts in, and the
 # workflow still produced a new one-caller library plus build wiring across

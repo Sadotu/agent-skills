@@ -12,7 +12,7 @@ A single continuous workflow — select the issue, design, implement, verify, PR
 - **Run all phases in one shell session** so `$REPO`, `$WORKSPACE`, and the `GH` helper below persist. This harness may run each command in a fresh shell; if the shell resets, re-run the setup block before continuing.
 - **GitHub App authentication is mandatory.** Never use the GitHub connector, a user PAT, `gh auth login`, or `gh auth setup-git`. If App authentication is unavailable, stop and run `/setup`.
 
-**Core principle:** the issue description is the leading input — it seeds the design work and is the spec you verify the result against. The PR opens as a draft *before* any design work, so the user reviews the whole design conversation asynchronously in the PR body rather than live.
+**Core principle:** the issue description is the spec you verify. The user reviews the design conversation asynchronously in the PR body rather than live.
 
 Setup — source the fail-closed App helper used by the scripts:
 
@@ -53,13 +53,13 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 
 **CRITICAL — synchronize before writing or committing issue work.** `git fetch` updates `origin/main`, not local `main`. Committing in the primary worktree before isolation pollutes local `main` and makes it diverge.
 
-`scripts/isolate.sh` checks the current branch and cleanliness, fetches (updating remote refs), rejects an unsafe base, and may fast-forward a clean local `main`. Only the wrong-branch, dirty-tree, and unsafe-base checks complete before the fast-forward; a later failure may leave local `main` synchronized. The script then branches from `origin/main`, creates the worktree, and opens the draft PR. On failure, diagnose the condition below and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there unless it explicitly inspects the primary worktree.
+`scripts/isolate.sh` checks the current branch and cleanliness, fetches (updating remote refs), rejects an unsafe base, and may fast-forward a clean local `main`. Only the wrong-branch, dirty-tree, and unsafe-base checks complete before the fast-forward; a later failure may leave local `main` synchronized. The script then branches from `origin/main`, creates the worktree, and opens with a `WIP: ` title. On failure, diagnose the condition below and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there unless it explicitly inspects the primary worktree.
 
 ```bash
 scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
 ```
 
-Report the PR URL before generating design questions. It stays draft until Phase 6.
+Report the PR URL before generating design questions. Its `WIP: ` title remains until Phase 6.
 
 ### Isolation-guard diagnosis (read-only)
 
@@ -211,7 +211,7 @@ If stale, `git rebase origin/main` (resolve conflicts, drop already-merged commi
 
 - Push the final commits to the existing branch.
 - Update the existing PR body: make the Summary's **Approach** match the actual diff, then append verification results against the acceptance criteria below Design Decisions. Preserve the single `Closes #<number>` line and Summary block. Because the spec and plan are session-local, do not link their paths.
-- Hand off: `scripts/finish-handoff.sh <pr-number> <number>`. It marks the PR ready for the repository owner on both manual and managed runs, and starts no automated review, repair, approval, or merge phase.
+- Hand off: `scripts/finish-handoff.sh <pr-number> <number>`. It removes one leading `WIP: ` from the title and adds the `user-merge-review` label for the repository owner on both manual and managed runs; it starts no automated review, repair, approval, or merge phase.
 - Report its stderr line alongside the branch name and PR URL.
 
 Do not merge unless the user explicitly requests it.

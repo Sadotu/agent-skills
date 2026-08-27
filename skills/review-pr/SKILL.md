@@ -1,13 +1,12 @@
 ---
 name: review-pr
-description: Use for a single, read-only application-coherence and drift review pass against a linked issue and PR — scope drift, PR-description/implementation drift, overengineering, convention drift, integration gaps, orphaned compatibility code or TODOs. Never modifies code, approves, merges, or changes draft/label state; posts one idempotent, staleness-checked PR comment per pass, with cross-linking when evidence implicates another PR. Also supports a narrower `--mode integration --previous-fingerprint <fingerprint>` pass that revalidates an already-PASSed PR against a moved base, gated on the exact prior trusted PASS marker.
+description: Use for a single, read-only application-coherence and drift review pass against a linked issue and PR — scope drift, PR-description/implementation drift, overengineering, convention drift, integration gaps, orphaned compatibility code or TODOs. Never modifies code, approves, merges, or changes PR title or label state; posts one idempotent, staleness-checked PR comment per pass, with cross-linking when evidence implicates another PR. Also supports a narrower `--mode integration --previous-fingerprint <fingerprint>` pass that revalidates an already-PASSed PR against a moved base, gated on the exact prior trusted PASS marker.
 ---
 
 # Review PR — Read-Only Application Drift Review
 
 One read-only review pass against a linked issue + PR, checked against a
-stable snapshot. Never edits code, approves, merges, or changes draft/label
-state — only posts plain PR comments. Independent of `issue-orchestrator`'s
+stable snapshot. Never edits code, approves, merges, or changes PR title or label state — only posts plain PR comments. Independent of `issue-orchestrator`'s
 scheduling/repair: takes an issue number and PR number, performs exactly
 one pass.
 
@@ -240,7 +239,7 @@ scripts/publish-crosslink.sh <target-pr-number> <pr-number> <issue-number> <find
 
 ## Red Flags — STOP
 
-- **Editing code, approving, merging, or changing draft/label state.** This skill only ever reads and posts comments.
+- **Editing code, approving, merging, or changing PR title or label state.** This skill only ever reads and posts comments.
 - **Posting without Phase 2's fingerprint.** Always pass it to `publish-review.sh` for re-verification — never skip or hand-construct the staleness check.
 - **Hand-rolling marker text.** Always go through `publish-review.sh`/`publish-crosslink.sh` — a hand-written marker can't be trusted by reruns or the external supervisor.
 - **Leaving the detached review worktree behind.** Always `git worktree remove` it at the end of Phase 3, success or failure.
