@@ -3,7 +3,7 @@
 #
 # Guards that the primary worktree is clean and on an unstale `main`, then
 # branches from freshly-fetched origin/main into an isolated worktree,
-# seeds a commit, pushes, and opens the draft PR. Wrong-branch, dirty-tree,
+# seeds a commit, pushes, and opens the PR. Wrong-branch, dirty-tree,
 # and unsafe-base checks finish before the fast-forward. Fetch updates remote
 # refs, and failures after the fast-forward may leave local main synchronized.
 #
@@ -36,15 +36,15 @@ test "$(git rev-parse main)" = "$(git rev-parse origin/main)"
 # --- Isolate: branch from origin/main into its own worktree ---
 git worktree add -b "$branch" "$worktree_path" origin/main
 
-# --- Open the PR now, as a draft: seed a commit, push, open immediately ---
+# --- Open the PR now: seed a commit, push, open immediately ---
 cd "$worktree_path"
 git commit --allow-empty -m "Start work on #${issue_number}"
 GIT_AUTH push origin "$branch:refs/heads/$branch"
 git update-ref "refs/remotes/origin/$branch" "$branch"
 git config "branch.$branch.remote" origin
 git config "branch.$branch.merge" "refs/heads/$branch"
-GH pr create --draft \
-  --title "$pr_title" \
+GH pr create \
+  --title "WIP: $pr_title" \
   --body "$(cat <<EOF
 Closes #${issue_number}
 
