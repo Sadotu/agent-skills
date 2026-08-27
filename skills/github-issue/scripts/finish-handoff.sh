@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Phase 6 handoff for skills/github-issue/SKILL.md.
 #
-# Both managed and manual runs finish implementation the same way: the PR is
-# marked ready for the repository owner. issue-orchestrator keeps
-# `agent-running` on a managed issue while the worker is active and releases
-# it after observing the ready PR. This helper does not start or label an
-# automated review phase.
+# Both managed and manual runs finish implementation the same way: the PR
+# leaves WIP state and receives the existing owner-review label. This helper
+# does not start an automated review, repair, approval, or merge phase.
 #
 # Usage: finish-handoff.sh <pr-number> <issue-number>
 set -euo pipefail
@@ -21,5 +19,8 @@ issue_number="$2"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/lib/gh.sh"
 
-GH pr ready "$pr_number"
-echo "implementation complete: PR #$pr_number marked ready for owner review (issue #$issue_number)" >&2
+title="$(GH pr view "$pr_number" --json title -q .title)"
+title="${title#WIP: }"
+GH label create user-merge-review --force || :
+GH pr edit "$pr_number" --title "$title" --add-label user-merge-review
+echo "implementation complete: PR #$pr_number labeled for owner review (issue #$issue_number)" >&2
