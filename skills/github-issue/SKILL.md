@@ -59,6 +59,8 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
 ```
 
+The title argument must **not** include a `WIP: ` prefix — the script adds one itself (and strips any pre-existing one, so a redundant prefix is now harmless rather than doubled).
+
 Report the PR URL before generating design questions. Its `WIP: ` title remains until Phase 6.
 
 ### Isolation-guard diagnosis (read-only)

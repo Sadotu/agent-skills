@@ -25,6 +25,13 @@ source "$script_dir/lib/gh.sh"
 
 branch="agent/${issue_number}-${slug}"
 
+# Idempotent: strip any pre-existing leading "WIP: " (case-insensitive,
+# possibly repeated) so a caller-supplied WIP prefix can't double up with
+# the one this script adds below.
+while [[ "$pr_title" =~ ^[Ww][Ii][Pp]:[[:space:]]* ]]; do
+  pr_title="${pr_title:${#BASH_REMATCH[0]}}"
+done
+
 # --- Guards: primary worktree must be clean, on main, and not diverged ---
 test "$(git branch --show-current)" = main
 test -z "$(git status --porcelain)"

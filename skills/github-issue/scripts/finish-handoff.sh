@@ -20,7 +20,11 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/lib/gh.sh"
 
 title="$(GH pr view "$pr_number" --json title -q .title)"
-title="${title#WIP: }"
+# Strip all leading "WIP: " occurrences (case-insensitive), as a safety net
+# against a title that was accidentally doubled up when the PR was opened.
+while [[ "$title" =~ ^[Ww][Ii][Pp]:[[:space:]]* ]]; do
+  title="${title:${#BASH_REMATCH[0]}}"
+done
 GH label create user-merge-review --force || :
 GH pr edit "$pr_number" --title "$title" --add-label user-merge-review
 echo "implementation complete: PR #$pr_number labeled for owner review (issue #$issue_number)" >&2

@@ -134,10 +134,21 @@ test_view_failure() {
   assert_not_contains "PR edit is not attempted after view failure" "$GH_LOG" "pr edit 33"
 }
 
+test_strips_doubled_wip_prefix() {
+  new_fixture
+  printf '%s\n' 'WIP: WIP: Double prefixed title' > "$PR_TITLE"
+  run_handoff 34 34 >"$BASE/out.log" 2>&1
+  local rc=$?
+  assert_eq "handoff exits zero" 0 "$rc"
+  assert_eq "handoff strips both WIP prefixes" "Double prefixed title" "$(<"$PR_TITLE")"
+  assert_contains "handoff edits with the fully stripped title" "$GH_LOG" "pr edit 34 --title Double prefixed title --add-label user-merge-review"
+}
+
 test_label_handoff
 test_rerun
 test_edit_failure_after_tolerated_label_create_failure
 test_view_failure
+test_strips_doubled_wip_prefix
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
