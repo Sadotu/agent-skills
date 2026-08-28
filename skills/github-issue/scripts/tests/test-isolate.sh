@@ -297,12 +297,44 @@ test_case5_rejects_fifth_argument() {
   assert_eq "case5: rejected invocation does not call gh" "" "$(cat "$GH_LOG")"
 }
 
+# --- Case 7: caller-supplied title already has a WIP prefix -> not doubled ---
+test_case7_strips_existing_wip_prefix() {
+  new_fixture
+  local wt="$BASE/wt"
+
+  run_isolate 8 already-wip "$wt" "WIP: Already Prefixed" >"$BASE/out.log" 2>&1
+  local rc=$?
+
+  assert_eq "case7: exits zero" 0 "$rc"
+  assert_true "case7: title carries exactly one WIP prefix" \
+    bash -c "grep -q -- '--title WIP: Already Prefixed' '$GH_LOG'"
+  assert_true "case7: title is not doubled" \
+    bash -c "! grep -q -- 'WIP: WIP:' '$GH_LOG'"
+}
+
+# --- Case 8: repeated, case-insensitive WIP prefixes are all stripped ---
+test_case8_strips_repeated_case_insensitive_wip_prefix() {
+  new_fixture
+  local wt="$BASE/wt"
+
+  run_isolate 9 repeated-wip "$wt" "wip: WIP:   Thing" >"$BASE/out.log" 2>&1
+  local rc=$?
+
+  assert_eq "case8: exits zero" 0 "$rc"
+  assert_true "case8: all pre-existing prefixes stripped before re-adding one" \
+    bash -c "grep -q -- '--title WIP: Thing' '$GH_LOG'"
+  assert_true "case8: no leftover duplicate prefix" \
+    bash -c "! grep -qiE -- 'wip: *wip:' '$GH_LOG'"
+}
+
 test_case1_dirty_primary_tree
 test_case2_diverged_main
 test_case3_not_on_main
 test_case4_happy_path
 test_case5_rejects_fifth_argument
 test_case6_helper_failure_stops_network_git
+test_case7_strips_existing_wip_prefix
+test_case8_strips_repeated_case_insensitive_wip_prefix
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
