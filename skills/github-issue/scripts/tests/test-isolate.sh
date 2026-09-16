@@ -255,6 +255,8 @@ test_case4_happy_path() {
     bash -c "! grep -q -- '--draft' '$GH_LOG'"
   assert_true "case4: PR title is marked WIP" \
     bash -c "grep -q -- '--title WIP: My PR Title' '$GH_LOG'"
+  assert_true "case4: no staging branch -> pr create passes no --base flag" \
+    bash -c "! grep -q -- '--base' '$GH_LOG'"
 
   local expected_body
   expected_body=$'Closes #7\n\n## Summary\n_In progress — filled in once design work completes._\n\n## Design Decisions\n_In progress — filled in once design work completes._'
@@ -264,6 +266,29 @@ test_case4_happy_path() {
     *"$expected_body"*) ok "case4: PR body is the exact template text" ;;
     *) fail "case4: PR body is the exact template text" ;;
   esac
+}
+
+# --- Case 7: origin/staging exists -> branch from it, PR targets it ---
+test_case9_staging_branch_present() {
+  new_fixture
+  local other="$BASE/staging-clone"
+  git clone -q "$ORIGIN" "$other"
+  git -C "$other" config user.email test@example.com
+  git -C "$other" config user.name "Test User"
+  git -C "$other" config core.hooksPath "$BASE/no-hooks"
+  git -C "$other" checkout -q -b staging
+  git -C "$other" commit -q --allow-empty -m "staging-only commit"
+  git -C "$other" push -q origin staging
+  local wt="$BASE/wt"
+
+  run_isolate 9 staging-case "$wt" "Staging Title" >"$BASE/out.log" 2>&1
+  local rc=$?
+
+  assert_eq "case9: exits zero" 0 "$rc"
+  assert_true "case9: worktree branched from origin/staging" \
+    bash -c "git -C '$wt' log --format=%s | grep -q 'staging-only commit'"
+  assert_true "case9: gh pr create passed --base staging" \
+    bash -c "grep -q -- '--base staging' '$GH_LOG'"
 }
 
 test_case6_helper_failure_stops_network_git() {
@@ -333,6 +358,7 @@ test_case3_not_on_main
 test_case4_happy_path
 test_case5_rejects_fifth_argument
 test_case6_helper_failure_stops_network_git
+test_case9_staging_branch_present
 test_case7_strips_existing_wip_prefix
 test_case8_strips_repeated_case_insensitive_wip_prefix
 

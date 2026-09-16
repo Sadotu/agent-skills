@@ -2,10 +2,11 @@
 # Phase 2 ("Synchronize and Isolate") for skills/github-issue/SKILL.md.
 #
 # Guards that the primary worktree is clean and on an unstale `main`, then
-# branches from freshly-fetched origin/main into an isolated worktree,
-# seeds a commit, pushes, and opens the PR. Wrong-branch, dirty-tree,
-# and unsafe-base checks finish before the fast-forward. Fetch updates remote
-# refs, and failures after the fast-forward may leave local main synchronized.
+# branches from freshly-fetched origin/staging (when it exists) or otherwise
+# origin/main into an isolated worktree, seeds a commit, pushes, and opens
+# the PR against that same base. Wrong-branch, dirty-tree, and unsafe-base
+# checks finish before the fast-forward. Fetch updates remote refs, and
+# failures after the fast-forward may leave local main synchronized.
 #
 # Usage: isolate.sh <issue-number> <slug> <worktree-path> <pr-title>
 set -euo pipefail
@@ -40,8 +41,14 @@ git merge-base --is-ancestor main origin/main
 git merge --ff-only origin/main
 test "$(git rev-parse main)" = "$(git rev-parse origin/main)"
 
-# --- Isolate: branch from origin/main into its own worktree ---
-git worktree add -b "$branch" "$worktree_path" origin/main
+# --- Base branch: origin/staging when present, otherwise origin/main ---
+base_branch=main
+if git show-ref --verify --quiet refs/remotes/origin/staging; then
+  base_branch=staging
+fi
+
+# --- Isolate: branch from origin/<base_branch> into its own worktree ---
+git worktree add -b "$branch" "$worktree_path" "origin/$base_branch"
 
 # --- Open the PR now: seed a commit, push, open immediately ---
 cd "$worktree_path"
@@ -50,9 +57,7 @@ GIT_AUTH push origin "$branch:refs/heads/$branch"
 git update-ref "refs/remotes/origin/$branch" "$branch"
 git config "branch.$branch.remote" origin
 git config "branch.$branch.merge" "refs/heads/$branch"
-GH pr create \
-  --title "WIP: $pr_title" \
-  --body "$(cat <<EOF
+pr_body="$(cat <<EOF
 Closes #${issue_number}
 
 ## Summary
@@ -62,3 +67,8 @@ _In progress — filled in once design work completes._
 _In progress — filled in once design work completes._
 EOF
 )"
+if [ "$base_branch" = staging ]; then
+  GH pr create --title "WIP: $pr_title" --base staging --body "$pr_body"
+else
+  GH pr create --title "WIP: $pr_title" --body "$pr_body"
+fi
