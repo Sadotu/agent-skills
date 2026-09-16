@@ -53,19 +53,19 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 
 **CRITICAL — synchronize before writing or committing issue work.** `git fetch` updates `origin/main`, not local `main`. Committing in the primary worktree before isolation pollutes local `main` and makes it diverge.
 
-`scripts/isolate.sh` checks the current branch and cleanliness, fetches (updating remote refs), rejects an unsafe base, and may fast-forward a clean local `main`. Wrong-branch, dirty-tree, and unsafe-base checks run before the fast-forward; later failures may leave local `main` synced. The script then branches from `origin/staging` (if present) or `origin/main`, creates the worktree, and opens with a `WIP: ` title. On failure, diagnose below and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there unless it explicitly inspects the primary worktree.
+`scripts/isolate.sh` requires clean `main`, fetches, and selects `origin/staging` when present, otherwise `origin/main`. The base must contain `origin/main`. Only main-based runs check local divergence and fast-forward `main`; staging-based runs leave it untouched. Guards finish before the fast-forward; later failures may leave `main` synced. It creates the worktree and opens with a `WIP: ` title. Diagnose failures below and ask. Use a 3–5 word slug and `.claude/worktrees/agent-<number>-<slug>`. After isolation, run all writes, commits, tests, and Git commands there except explicit primary-worktree inspections.
 
 ```bash
 scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
 ```
 
-The title argument must **not** include a `WIP: ` prefix — the script adds one itself (and strips any pre-existing one, so a redundant prefix is now harmless rather than doubled).
+Omit `WIP: ` from the title argument; the script normalizes existing prefixes and adds one.
 
 Report the PR URL before generating design questions. Its `WIP: ` title remains until Phase 6.
 
 ### Isolation-guard diagnosis (read-only)
 
-If isolation fails, inspect the primary worktree with `git branch --show-current` and `git status --porcelain`. The first guards run in this order: a branch other than `main` means wrong branch; `main` with nonempty porcelain means dirty main. After both pass and fetch succeeds, exit 1 from `git merge-base --is-ancestor main origin/main` establishes an unsafe base before the fast-forward. Any other nonzero exit, including an error from that command or a later merge, equality, worktree, commit, push, or PR command, must be reported as the actual command failure; local `main` may already have been fast-forwarded. App-auth failures require `/setup`. For dirty main, run:
+On failure, inspect `git branch --show-current` and `git status --porcelain` in the primary worktree. Guards run in order: non-`main` means wrong branch; nonempty porcelain means dirty main. After fetch, exit 1 from `git merge-base --is-ancestor origin/main origin/<base_branch>` means the base lacks mainline commits. For main-based runs, exit 1 from `git merge-base --is-ancestor main origin/main` means unsafe local main before the fast-forward. Report either and ask; do not repair staging. Any other nonzero exit is the actual command failure; local `main` may already be synchronized. App-auth failures require `/setup`. For dirty main, run:
 
 ```bash
 scripts/diagnose-dirty-main.sh
