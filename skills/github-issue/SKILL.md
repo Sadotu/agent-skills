@@ -53,7 +53,7 @@ Summarize: request, current behavior, expected outcome, acceptance criteria, lin
 
 **CRITICAL — synchronize before writing or committing issue work.** `git fetch` updates `origin/main`, not local `main`. Committing in the primary worktree before isolation pollutes local `main` and makes it diverge.
 
-`scripts/isolate.sh` checks the current branch and cleanliness, fetches (updating remote refs), rejects an unsafe base, and may fast-forward a clean local `main`. Only the wrong-branch, dirty-tree, and unsafe-base checks complete before the fast-forward; a later failure may leave local `main` synchronized. The script then branches from `origin/main`, creates the worktree, and opens with a `WIP: ` title. On failure, diagnose the condition below and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there unless it explicitly inspects the primary worktree.
+`scripts/isolate.sh` checks the current branch and cleanliness, fetches (updating remote refs), rejects an unsafe base, and may fast-forward a clean local `main`. Wrong-branch, dirty-tree, and unsafe-base checks run before the fast-forward; later failures may leave local `main` synced. The script then branches from `origin/staging` (if present) or `origin/main`, creates the worktree, and opens with a `WIP: ` title. On failure, diagnose below and ask for direction. Use a 3–5 word kebab-case slug; `<worktree-path>` is `.claude/worktrees/agent-<number>-<slug>`. After isolation, run every write, commit, test, and Git command there unless it explicitly inspects the primary worktree.
 
 ```bash
 scripts/isolate.sh <number> <slug> <worktree-path> "<title referencing #<number>>"
@@ -198,16 +198,18 @@ Report changed line counts separately by kind: production, test, documentation, 
 
 **REQUIRED SUB-SKILL:** Use `superpowers:finishing-a-development-branch`.
 
-**Before pushing, guard against a stale base** — a branch far behind `origin/main` produces a bloated, dangerous PR diff:
+**Before pushing, guard against a stale base** — a branch far behind produces a bloated PR diff:
 
 ```bash
 GIT_AUTH fetch origin '+refs/heads/*:refs/remotes/origin/*'
-base=$(git merge-base origin/main HEAD)
-behind=$(git rev-list --count "$base"..origin/main)
-[ "$behind" -gt 50 ] && echo "STALE BASE: $behind commits behind origin/main — rebase before PR"
+base_ref=origin/main
+git show-ref --verify --quiet refs/remotes/origin/staging && base_ref=origin/staging
+base=$(git merge-base "$base_ref" HEAD)
+behind=$(git rev-list --count "$base".."$base_ref")
+[ "$behind" -gt 50 ] && echo "STALE BASE: $behind commits behind $base_ref — rebase before PR"
 ```
 
-If stale, `git rebase origin/main` (resolve conflicts, drop already-merged commits), then re-run Phase 5. Confirm `git diff --stat origin/main...HEAD` shows only your intended files before finalizing.
+If stale, `git rebase "$base_ref"` (resolve conflicts, drop merged commits) and re-run Phase 5; confirm `git diff --stat "$base_ref"...HEAD` shows only intended files.
 
 **The PR already exists (opened in Phase 2) — finalize it, don't create a new one:**
 
