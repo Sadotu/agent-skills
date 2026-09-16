@@ -352,6 +352,56 @@ test_case8_strips_repeated_case_insensitive_wip_prefix() {
     bash -c "! grep -qiE -- 'wip: *wip:' '$GH_LOG'"
 }
 
+# Exercise real Git ancestry and primary-branch state for each selected base.
+test_case10_selected_base_guards() {
+  local scenario
+  for scenario in main current-staging behind-staging diverged-staging; do
+    new_fixture
+    local original_main remote_main staging_tip wt="$BASE/wt"
+    original_main="$(git -C "$CLONE" rev-parse main)"
+    git -C "$CLONE" commit -q --allow-empty -m "new mainline commit"
+    remote_main="$(git -C "$CLONE" rev-parse main)"
+    git -C "$CLONE" push -q origin main
+    git -C "$CLONE" reset -q --hard "$original_main"
+    if [ "$scenario" != main ]; then
+      staging_tip="$original_main"
+      if [ "$scenario" = current-staging ]; then staging_tip="$remote_main"; fi
+      if [ "$scenario" = diverged-staging ]; then
+        git -C "$CLONE" checkout -q -b staging
+        git -C "$CLONE" commit -q --allow-empty -m "staging-only commit"
+        staging_tip="$(git -C "$CLONE" rev-parse HEAD)"
+        git -C "$CLONE" checkout -q main
+      fi
+      git -C "$CLONE" push -q origin "$staging_tip:refs/heads/staging"
+    fi
+
+    run_isolate 10 "$scenario" "$wt" "Selected base" >"$BASE/out.log" 2>&1
+    local rc=$?
+    case "$scenario" in
+      main|current-staging)
+        assert_eq "$scenario: isolation succeeds" 0 "$rc"
+        assert_eq "$scenario: branch starts at fetched base" "$remote_main" \
+          "$(git -C "$wt" rev-parse HEAD^)"
+        ;;
+      *)
+        assert_eq "$scenario: unsafe base rejected" 1 "$rc"
+        assert_true "$scenario: diagnostic identifies missing mainline" \
+          grep -q 'origin/staging does not contain origin/main' "$BASE/out.log"
+        assert_true "$scenario: no worktree created" [ ! -e "$wt" ]
+        assert_eq "$scenario: no PR attempted" "" "$(cat "$GH_LOG")"
+        assert_true "$scenario: no branch pushed" \
+          bash -c "! git -C '$ORIGIN' show-ref --verify --quiet refs/heads/agent/10-$scenario"
+        ;;
+    esac
+    if [ "$scenario" = main ]; then
+      assert_eq "$scenario: local main fast-forwarded" "$remote_main" "$(git -C "$CLONE" rev-parse main)"
+    else
+      assert_eq "$scenario: local main unchanged" "$original_main" "$(git -C "$CLONE" rev-parse main)"
+    fi
+  done
+}
+
+test_case10_selected_base_guards
 test_case1_dirty_primary_tree
 test_case2_diverged_main
 test_case3_not_on_main
